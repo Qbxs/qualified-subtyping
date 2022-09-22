@@ -43,6 +43,16 @@ data Witness (pol :: Polarity) (pred :: Predicate pol) (t :: Typ pol) where
     CoV      :: Witness Pos pred (TyFlipPol t) -> s :< t -> Witness Pos pred s
     ContraV  :: Witness Neg pred (TyFlipPol t) -> t :< s -> Witness Neg pred s
 
+-- derived rules (other derived rules cannot be typed)
+botW :: Witness Pos pred (TyFlipPol t) -> Witness Pos pred Bot
+botW w = CoV w ToBot
+topW :: Witness Neg pred (TyFlipPol t) -> Witness Neg pred Top
+topW w = ContraV w FromTop
+natW :: Witness Pos pred (TyFlipPol Int') -> Witness Pos pred Nat
+natW w = CoV w Prim
+intW :: Witness Neg pred (TyFlipPol Nat) -> Witness Neg pred Int'
+intW w = ContraV w Prim
+
 showableNat :: Witness Pos Showable Nat
 showableNat = CoV (Instance ()) Prim
 
