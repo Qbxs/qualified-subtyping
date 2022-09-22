@@ -43,15 +43,24 @@ data Witness (pol :: Polarity) (pred :: Predicate pol) (t :: Typ pol) where
     CoV      :: Witness Pos pred (TyFlipPol t) -> s :< t -> Witness Pos pred s
     ContraV  :: Witness Neg pred (TyFlipPol t) -> t :< s -> Witness Neg pred s
 
--- derived rules (other derived rules cannot be typed)
-botW :: Witness Pos pred (TyFlipPol t) -> Witness Pos pred Bot
-botW w = CoV w ToBot
-topW :: Witness Neg pred (TyFlipPol t) -> Witness Neg pred Top
-topW w = ContraV w FromTop
-natW :: Witness Pos pred (TyFlipPol Int') -> Witness Pos pred Nat
-natW w = CoV w Prim
-intW :: Witness Neg pred (TyFlipPol Nat) -> Witness Neg pred Int'
-intW w = ContraV w Prim
+-- derived rules
+bot :: Witness Pos pred (TyFlipPol t) -> Witness Pos pred Bot
+bot w = CoV w ToBot
+top :: Witness Neg pred (TyFlipPol t) -> Witness Neg pred Top
+top w = ContraV w FromTop
+nat :: Witness Pos pred (TyFlipPol Int') -> Witness Pos pred Nat
+nat w = CoV w Prim
+int :: Witness Neg pred (TyFlipPol Nat) -> Witness Neg pred Int'
+int w = ContraV w Prim
+-- not typeable as is:
+-- proj1 :: Witness Neg pred t -> Witness Neg pred (Inter t s)
+-- proj1 w = ContraV w (Proj1 Refl)
+-- proj2 :: Witness Neg pred t -> Witness Neg pred (Inter s t)
+-- proj2 w = ContraV w (Proj2 Refl)
+-- in1 :: Witness Pos pred t -> Witness Pos pred (Union t s)
+-- in1 w = CoV w (In1 Refl)
+-- in2 :: Witness Pos pred t -> Witness Pos pred (Union s t)
+-- in2 w = CoV w (In2 Refl)
 
 showableNat :: Witness Pos Showable Nat
 showableNat = CoV (Instance ()) Prim
