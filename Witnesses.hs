@@ -21,7 +21,7 @@ data Typ (pol :: Polarity) where
     TyFlipPol :: Typ pol -> Typ (FlipPol pol)
 
 data (:<) (t :: Typ Pos) (s :: Typ Neg) where
-    Refl    :: t :< TyFlipPol t
+    Refl    :: TyFlipPol t :< t
     Trans   :: t :< s -> TyFlipPol s :< r -> t :< r
     FromTop :: t :< Top
     ToBot   :: Bot :< t
