@@ -39,6 +39,20 @@ data Predicate (pol :: Polarity) where
      Showable    :: Predicate Pos
      Defaultable :: Predicate Neg
 
+newtype ShowDictionary t =
+    ShowDictionary {
+        show :: t -> String
+    }
+
+newtype DefaultDictionary t =
+    DefaultDictionary {
+        defaultVal :: t
+    }
+
+-- type family ToDict (pol :: Polarity) (pred :: Predicate pol) t where
+--     ToDict Pos Showable t = ShowDictionary t
+--     ToDict Neg Defaultable t = DefaultDictionary t
+
 data Witness (pol :: Polarity) (pred :: Predicate pol) (t :: Typ pol) where
     Instance :: Predicate pol -> Typ pol -> Witness pol pred t
     CoV      :: Witness Pos pred (TyFlipPol t) -> s :< t -> Witness Pos pred s
