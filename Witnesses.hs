@@ -3,6 +3,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE RankNTypes #-}
 module Witnesses where
 
 data Polarity = Pos | Neg
@@ -39,7 +40,7 @@ data Predicate (pol :: Polarity) where
      Defaultable :: Predicate Neg
 
 data Witness (pol :: Polarity) (pred :: Predicate pol) (t :: Typ pol) where
-    Instance :: () -> Witness pol a t -- get any instance
+    Instance :: Predicate pol -> Typ pol -> Witness pol pred t
     CoV      :: Witness Pos pred (TyFlipPol t) -> s :< t -> Witness Pos pred s
     ContraV  :: Witness Neg pred (TyFlipPol t) -> t :< s -> Witness Neg pred s
 
@@ -63,7 +64,7 @@ int w = ContraV w Prim
 -- in2 w = CoV w (In2 Refl)
 
 showableNat :: Witness Pos Showable Nat
-showableNat = CoV (Instance ()) Prim
+showableNat = CoV (Instance Showable Int') Prim
 
 defaultableInt :: Witness Neg Defaultable (Inter Int' Top)
-defaultableInt = ContraV (Instance ()) (Proj1 Refl)
+defaultableInt = ContraV (Instance Defaultable Nat) (Proj1 Refl)
