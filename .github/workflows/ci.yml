@@ -6,5 +6,5 @@ jobs:
     runs-on: macOS-latest # or ubuntu-latest, or windows-latest
     steps:
       - uses: actions/checkout@v2
-      - uses: actions/setup-haskell@v1.1
+      - uses: actions/setup-haskell@2
       - run: runhaskell Witnesses.hs
