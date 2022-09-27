@@ -6,6 +6,9 @@
 {-# LANGUAGE RankNTypes #-}
 module Witnesses where
 
+main :: IO ()
+main = pure ()
+
 data Polarity = Pos | Neg
 
 type family FlipPol (pol :: Polarity) where
