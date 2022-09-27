@@ -3,8 +3,8 @@ name: build
 jobs:
   runhaskell:
     name: Type checking
-    runs-on: macOS-latest # or ubuntu-latest, or windows-latest
+    runs-on: ubuntu-latest # or macOS-latest, or windows-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-haskell@2
+      - uses: actions/checkout@v3
+      - uses: haskell/actions/setup@v2
       - run: runhaskell Witnesses.hs
