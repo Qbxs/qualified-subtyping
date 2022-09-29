@@ -20,8 +20,8 @@ main :: IO ()
 main = print
     (generateWitnesses
         [ Subtype Bot                          Top
-        , Subtype Nat                          (Inter Nat Top)
-        , Subtype (Union Int' (Inter Top Bot)) Int'
+        , Subtype Nat                          (Inter Nat Int')
+        , Subtype (Union Int' (Union Nat Bot)) Int'
         ]
     )
 
@@ -119,7 +119,7 @@ solveSubWithWitness (Subtype t   (Inter r s)) = do
 solveSubWithWitness (Subtype (Union t s) r) = do
     foo <- gets ss_fresh
     let (var1 : (var2 : rest)) = foo -- ???
-    let m' = M.fromList [(var1, Subtype t r), (var2, Subtype t s)]
+    let m' = M.fromList [(var1, Subtype s r), (var2, Subtype t r)]
     modify (\(SolverState m d _) -> SolverState (M.union m' m) d rest)
     pure $ Join (SubVar var1) (SubVar var2)
 solveSubWithWitness (Subtype Nat  Nat ) = pure Refl
