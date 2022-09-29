@@ -5,83 +5,87 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 module Witnesses where
+import Control.Monad.State
+import Control.Monad.Except
+import Control.Monad.Writer
 
 main :: IO ()
 main = pure ()
 
 data Polarity = Pos | Neg
+data Typ where
+    Top       :: Typ
+    Bot       :: Typ
+    Inter     :: Typ -> Typ -> Typ
+    Union     :: Typ -> Typ -> Typ
+    Int'      :: Typ
+    Nat       :: Typ
 
-type family FlipPol (pol :: Polarity) where
-    FlipPol Pos = Neg
-    FlipPol Neg = Pos
+data (:<) where
+    Refl    :: (:<)
+    FromTop :: (:<)
+    ToBot   :: (:<)
+    Meet    :: (:<) -> (:<) -> (:<)
+    Join    :: (:<) -> (:<) -> (:<)
+    Prim    :: (:<)
+    SubVar  :: Char -> (:<)
 
-data Typ (pol :: Polarity) where
-    Top       :: Typ Neg
-    Bot       :: Typ Pos
-    Inter     :: Typ Neg -> Typ Neg -> Typ Neg
-    Union     :: Typ Pos -> Typ Pos -> Typ Pos
-    Int'      :: Typ pol
-    Nat       :: Typ pol
-    TyFlipPol :: Typ pol -> Typ (FlipPol pol)
+data Constraint where
+    Subtype :: Typ -> Typ -> Constraint
+    InComplete :: Char -> Constraint -> Constraint
 
-data (:<) (t :: Typ Pos) (s :: Typ Neg) where
-    Refl    :: TyFlipPol t :< t
-    Trans   :: t :< s -> TyFlipPol s :< r -> t :< r
-    FromTop :: t :< Top
-    ToBot   :: Bot :< t
-    Proj1   :: TyFlipPol t :< r -> TyFlipPol (Inter t s) :< r
-    Proj2   :: TyFlipPol t :< r -> TyFlipPol (Inter s t) :< r
-    In1     :: t :< TyFlipPol r -> t :< TyFlipPol (Union s r)
-    In2     :: t :< TyFlipPol r -> t :< TyFlipPol (Union r s)
-    Meet    :: t :< s -> t :< r -> t :< Inter s r
-    Join    :: t :< r -> s :< r -> Union t s :< r 
-    Prim    :: Nat :< Int'
+solve :: [Constraint] -> SolverM [(:<)]
+solve [] = pure []
+solve ((InComplete v cnstr):cs) = do
+    solve (cnstr:cs)
+solve (cnstr:cs) = do
+    (foo,bar) <- solveSubWithWitness cnstr
+    tell [bar]
+    solve (foo++cs)
+
+-- | Apply all substitutions to obtain complete witnesses (without witness-vars)
+applySubst :: [(:<)] -> [Constraint] -> [Constraint]
+applySubst = undefined
 
 
-data Predicate (pol :: Polarity) where
-     Showable    :: Predicate Pos
-     Defaultable :: Predicate Neg
+solveSub :: Constraint -> [Constraint]
+solveSub (Subtype _ Top) = []
+solveSub (Subtype Bot _) = []
+solveSub (Subtype t (Inter r s)) = [Subtype t r, Subtype t s]
+solveSub (Subtype (Union t s) r) = [Subtype t r, Subtype t s]
+solveSub (Subtype Nat Nat) = []
+solveSub (Subtype Int' Int') = []
+solveSub (Subtype Nat Int') = []
+solveSub _ = error "no"
 
-newtype ShowDictionary t =
-    ShowDictionary {
-        show :: t -> String
-    }
+type SolverM a = StateT [Char] (WriterT [(:<)] (Except String)) a
 
-newtype DefaultDictionary t =
-    DefaultDictionary {
-        defaultVal :: t
-    }
+runSolverM :: SolverM a -> Either String (a,[(:<)])
+runSolverM s = runExcept $ runWriterT $ evalStateT s ['a'..]
 
--- type family ToDict (pol :: Polarity) (pred :: Predicate pol) t where
---     ToDict Pos Showable t = ShowDictionary t
---     ToDict Neg Defaultable t = DefaultDictionary t
+solveSubWithWitness :: Constraint -> SolverM ([Constraint], (:<))
+solveSubWithWitness (Subtype _ Top) = pure ([], FromTop)
+solveSubWithWitness (Subtype Bot _) = pure ([], ToBot)
+solveSubWithWitness (Subtype t (Inter r s)) = do
+    foo <- get
+    let (var1:(var2:rest)) = foo -- ???
+    put rest
+    pure ([InComplete var1 $ Subtype t r, InComplete var2 $ Subtype t s], Meet (SubVar var1) (SubVar var2))
+solveSubWithWitness (Subtype (Union t s) r)  = do
+    foo <- get
+    let (var1:(var2:rest)) = foo -- ???
+    put rest
+    pure ([InComplete var1 $ Subtype t r, InComplete var2 $ Subtype t s], Join (SubVar var1) (SubVar var2))
+solveSubWithWitness (Subtype Nat Nat) = pure ([], Refl)
+solveSubWithWitness (Subtype Int' Int') = pure ([], Refl)
+solveSubWithWitness (Subtype Nat Int') = pure ([], Prim)
+solveSubWithWitness _ = throwError "no"
 
-data Witness (pol :: Polarity) (pred :: Predicate pol) (t :: Typ pol) where
-    Instance :: Predicate pol -> Typ pol -> Witness pol pred t
-    CoV      :: Witness Pos pred (TyFlipPol t) -> s :< t -> Witness Pos pred s
-    ContraV  :: Witness Neg pred (TyFlipPol t) -> t :< s -> Witness Neg pred s
+data Dictionary t where
+    ShowDict :: Dictionary t
+    DefDict  :: Dictionary t
 
--- derived rules
-bot :: Witness Pos pred (TyFlipPol t) -> Witness Pos pred Bot
-bot w = CoV w ToBot
-top :: Witness Neg pred (TyFlipPol t) -> Witness Neg pred Top
-top w = ContraV w FromTop
-nat :: Witness Pos pred (TyFlipPol Int') -> Witness Pos pred Nat
-nat w = CoV w Prim
-int :: Witness Neg pred (TyFlipPol Nat) -> Witness Neg pred Int'
-int w = ContraV w Prim
--- not typeable as is:
--- proj1 :: Witness Neg pred t -> Witness Neg pred (Inter t s)
--- proj1 w = ContraV w (Proj1 Refl)
--- proj2 :: Witness Neg pred t -> Witness Neg pred (Inter s t)
--- proj2 w = ContraV w (Proj2 Refl)
--- in1 :: Witness Pos pred t -> Witness Pos pred (Union t s)
--- in1 w = CoV w (In1 Refl)
--- in2 :: Witness Pos pred t -> Witness Pos pred (Union s t)
--- in2 w = CoV w (In2 Refl)
+-- data Witness t where
+--     CoV      :: Dictionary t -> s :< t -> Witness s
+--     ContraV  :: Dictionary t -> t :< s -> Witness s
 
-showableNat :: Witness Pos Showable Nat
-showableNat = CoV (Instance Showable Int') Prim
-
-defaultableInt :: Witness Neg Defaultable (Inter Int' Top)
-defaultableInt = ContraV (Instance Defaultable Nat) (Proj1 Refl)
