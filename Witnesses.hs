@@ -43,14 +43,13 @@ runSolverM s = runExcept $ evalStateT s (SolverState M.empty M.empty ['a' ..])
 generateWitnesses :: [Constraint] -> Either String [(:<)]
 generateWitnesses cs = runSolverM (solve cs >>= substitute)
 
-data Polarity = Pos | Neg
 data Typ where
-    Top       :: Typ
-    Bot       :: Typ
-    Inter     :: Typ -> Typ -> Typ
-    Union     :: Typ -> Typ -> Typ
-    Int'      :: Typ
-    Nat       :: Typ
+    Top   :: Typ
+    Bot   :: Typ
+    Inter :: Typ -> Typ -> Typ
+    Union :: Typ -> Typ -> Typ
+    Int'  :: Typ
+    Nat   :: Typ
  deriving Show
 
 data (:<) where
@@ -68,7 +67,7 @@ data Constraint where
  deriving Show
 
 solve :: [Constraint] -> SolverM [(:<)]
-solve []                          = pure []
+solve [] = pure []
 solve ((Subtype t s) : cs) = do
     w <- solveSubWithWitness (Subtype t s)
     todos <- gets ss_todos
@@ -111,27 +110,18 @@ solveSubWithWitness :: Constraint -> SolverM (:<)
 solveSubWithWitness (Subtype _   Top        ) = pure FromTop
 solveSubWithWitness (Subtype Bot _          ) = pure ToBot
 solveSubWithWitness (Subtype t   (Inter r s)) = do
-    foo <- gets ss_fresh
-    let (var1 : (var2 : rest)) = foo -- ???
-    let m' = M.fromList [(var1, Subtype t r), (var2, Subtype t s)]
-    modify (\(SolverState m d _) -> SolverState (M.union m' m) d rest)
+    freshStream <- gets ss_fresh
+    let (var1 : (var2 : rest)) = freshStream
+    let varWitnesses = M.fromList [(var1, Subtype t r), (var2, Subtype t s)]
+    modify (\(SolverState todos known _) -> SolverState (M.union varWitnesses todos) known rest)
     pure $ Meet (SubVar var1) (SubVar var2)
 solveSubWithWitness (Subtype (Union t s) r) = do
-    foo <- gets ss_fresh
-    let (var1 : (var2 : rest)) = foo -- ???
-    let m' = M.fromList [(var1, Subtype s r), (var2, Subtype t r)]
-    modify (\(SolverState m d _) -> SolverState (M.union m' m) d rest)
+    freshStream <- gets ss_fresh
+    let (var1 : (var2 : rest)) = freshStream
+    let varWitnesses = M.fromList [(var1, Subtype s r), (var2, Subtype t r)]
+    modify (\(SolverState todos known _) -> SolverState (M.union varWitnesses todos) known rest)
     pure $ Join (SubVar var1) (SubVar var2)
 solveSubWithWitness (Subtype Nat  Nat ) = pure Refl
 solveSubWithWitness (Subtype Int' Int') = pure Refl
 solveSubWithWitness (Subtype Nat  Int') = pure Prim
 solveSubWithWitness _                   = throwError "Cannot solve constraint."
-
-data Dictionary t where
-    ShowDict :: Dictionary t
-    DefDict  :: Dictionary t
-
--- data Witness t where
---     CoV      :: Dictionary t -> s :< t -> Witness s
---     ContraV  :: Dictionary t -> t :< s -> Witness s
-
