@@ -80,14 +80,15 @@ solveTodos :: SolverM ()
 solveTodos = do
     todos <- gets ss_todos
     known' <- mapM solveSubWithWitness todos
-    modify (\(SolverState todos known fresh) -> SolverState M.empty (M.union known' known) fresh)
+    modify (\(SolverState todos' known fresh) -> SolverState (M.difference todos' todos) (M.union known' known) fresh)
     unless (M.null todos) solveTodos
 
 -- | Substitute known witnesses for generated witness variables.
 substitute :: [(:<)] -> SolverM [(:<)]
 substitute witnesses = do
     m <- gets ss_known
-    mapM (go m) witnesses
+    coalesced <- mapM (go m) m
+    mapM (go coalesced) witnesses
   where
     go :: Map Var (:<) -> (:<) -> SolverM (:<)
     go m Refl = pure Refl
