@@ -15,15 +15,19 @@ import           Control.Monad.Except
 import           Control.Monad.State
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
+import           Data.Tuple                     ( swap )
 
 main :: IO ()
-main = print
-    (generateWitnesses
-        [ Subtype Bot                          Top
-        , Subtype Nat                          (Inter (Inter Top Nat) Int')
-        , Subtype (Union Int' (Union Nat Bot)) Int'
-        ]
-    )
+main =
+    case
+            generateWitnesses
+                [ Subtype Bot Top
+                , Subtype Nat (Inter (Inter Top Nat) Int')
+                , Subtype (Union Int' (Union Nat Bot)) Int'
+                ]
+        of
+            Left  err -> putStrLn err
+            Right sol -> print sol
 
 type SolverM a = StateT SolverState (Except String) a
 
@@ -38,13 +42,18 @@ data SolverState = SolverState
       ss_fresh :: [Var]
       -- ^ "stream" of fresh variables
     }
+ deriving Show
 
-runSolverM :: SolverM a -> Either String a
-runSolverM s = runExcept $ evalStateT s (SolverState M.empty M.empty M.empty ['a' ..])
+runSolverM :: SolverM a -> Either String SolverState
+runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty M.empty M.empty ['a' ..]))
 
 -- | Generate subtyping witnesses for subtyping constraints.
-generateWitnesses :: [Constraint] -> Either String [(:<)]
-generateWitnesses cs = runSolverM (solve cs >>= substitute)
+generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
+generateWitnesses cs = verify =<< runSolverM (solve cs >> substitute)
+  where
+    verify (SolverState cache todos known _)
+        | not (M.null todos) = Left ("Some todos are left:\n" <> show todos)
+        | otherwise          = Right (M.compose known cache)
 
 data Typ where
     Top   :: Typ
@@ -53,7 +62,7 @@ data Typ where
     Union :: Typ -> Typ -> Typ
     Int'  :: Typ
     Nat   :: Typ
- deriving Show
+ deriving (Show, Eq, Ord)
 
 data (:<) where
     Refl    :: Typ -> (:<)
@@ -69,15 +78,16 @@ data (:<) where
 
 data Constraint where
     Subtype :: Typ -> Typ -> Constraint
- deriving Show
+ deriving (Show, Eq, Ord)
 
-solve :: [Constraint] -> SolverM [(:<)]
-solve [] = pure []
+solve :: [Constraint] -> SolverM ()
+solve [] = pure ()
 solve (c : cs) = do
     w <- solveSubWithWitness c
+    var <- freshVar
+    addToCache c var w
     solveTodos
-    cs <- solve cs
-    pure (w : cs)
+    solve cs
 
 -- | Solve todos recursively.
 solveTodos :: SolverM ()
@@ -89,11 +99,12 @@ solveTodos = do
     unless (M.null todos) solveTodos
 
 -- | Substitute known witnesses for generated witness variables.
-substitute :: [(:<)] -> SolverM [(:<)]
-substitute witnesses = do
-    m <- gets ss_known
-    coalesced <- mapM (go m) m
-    mapM (go coalesced) witnesses
+substitute :: SolverM ()
+substitute = do
+    ws <- gets ss_known
+    coalesced <- mapM (go ws) ws
+    modify $ \(SolverState cache todos _ fresh)
+            -> SolverState cache todos coalesced fresh
   where
     go :: Map Var (:<) -> (:<) -> SolverM (:<)
     go m (Refl ty) = pure (Refl ty)
@@ -104,7 +115,8 @@ substitute witnesses = do
     go m Prim = pure Prim
     go m (SubVar c) = case M.lookup c m of
          Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> show m
-         Just w -> pure w
+         Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
+         Just w -> go m w
 
 -- | subconstraints for reference.
 solveSub :: Constraint -> [Constraint]
@@ -136,7 +148,7 @@ solveSubWithWitness (Subtype (Union t s) r) = do
 solveSubWithWitness (Subtype Nat  Nat ) = pure (Refl Nat)
 solveSubWithWitness (Subtype Int' Int') = pure (Refl Int')
 solveSubWithWitness (Subtype Nat  Int') = pure Prim
-solveSubWithWitness _                   = throwError "Cannot solve constraint."
+solveSubWithWitness c                   = throwError $ "Cannot solve constraint:\n" <> show c
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -153,5 +165,20 @@ freshVar = do
 
 -- | Add elements to todo-map.
 addTodos :: [(Var, Constraint)] -> SolverM ()
-addTodos new = modify $ \(SolverState cache todos known fresh)
-            -> SolverState cache (M.union (M.fromList new) todos) known fresh
+addTodos new = modify $ \(SolverState cache todos known fresh) -> SolverState
+    (M.union (M.fromList (swap <$> new)) cache)
+    (M.union (M.fromList new) todos)
+    known
+    fresh
+
+-- | Check whether constraint is already solved.
+inCache :: Constraint -> SolverM Bool
+inCache c =  gets $ M.member c . ss_cache
+
+-- | Add solved constraint to cache and known witnesses.
+addToCache :: Constraint -> Var -> (:<) -> SolverM ()
+addToCache c var w = modify $ \(SolverState cache todos known fresh) -> SolverState
+    (M.insert c var cache)
+    todos
+    (M.insert var w known)
+    fresh
