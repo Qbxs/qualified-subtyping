@@ -54,9 +54,9 @@ data Typ where
  deriving Show
 
 data (:<) where
-    Refl    :: (:<)
-    FromTop :: (:<)
-    ToBot   :: (:<)
+    Refl    :: Typ -> (:<)
+    FromTop :: Typ -> (:<)
+    ToBot   :: Typ -> (:<)
     Meet    :: (:<) -> (:<) -> (:<)
     Join    :: (:<) -> (:<) -> (:<)
     Prim    :: (:<)
@@ -91,9 +91,9 @@ substitute witnesses = do
     mapM (go coalesced) witnesses
   where
     go :: Map Var (:<) -> (:<) -> SolverM (:<)
-    go m Refl = pure Refl
-    go m FromTop = pure FromTop
-    go m ToBot = pure ToBot
+    go m (Refl ty) = pure (Refl ty)
+    go m (FromTop ty) = pure (FromTop ty)
+    go m (ToBot ty) = pure (ToBot ty)
     go m (Meet x0 x1) = Meet <$> go m x0 <*> go m x1
     go m (Join x0 x1) = Join <$> go m x0 <*> go m x1
     go m Prim = pure Prim
@@ -116,8 +116,8 @@ solveSub _ = error "Cannot solve constraint."
 -- using fresh witness variables in place for branches
 -- which will be substituted in later.
 solveSubWithWitness :: Constraint -> SolverM (:<)
-solveSubWithWitness (Subtype _   Top        ) = pure FromTop
-solveSubWithWitness (Subtype Bot _          ) = pure ToBot
+solveSubWithWitness (Subtype ty  Top        ) = pure (FromTop ty)
+solveSubWithWitness (Subtype Bot ty         ) = pure (ToBot ty)
 solveSubWithWitness (Subtype t   (Inter r s)) = do
     freshStream <- gets ss_fresh
     let (var1 : (var2 : rest)) = freshStream
@@ -130,7 +130,7 @@ solveSubWithWitness (Subtype (Union t s) r) = do
     let varWitnesses = M.fromList [(var1, Subtype t r), (var2, Subtype s r)]
     modify (\(SolverState todos known _) -> SolverState (M.union varWitnesses todos) known rest)
     pure $ Join (SubVar var1) (SubVar var2)
-solveSubWithWitness (Subtype Nat  Nat ) = pure Refl
-solveSubWithWitness (Subtype Int' Int') = pure Refl
+solveSubWithWitness (Subtype Nat  Nat ) = pure (Refl Nat)
+solveSubWithWitness (Subtype Int' Int') = pure (Refl Int')
 solveSubWithWitness (Subtype Nat  Int') = pure Prim
 solveSubWithWitness _                   = throwError "Cannot solve constraint."
