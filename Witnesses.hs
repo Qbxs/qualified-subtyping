@@ -25,8 +25,7 @@ main =
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot)) Int'
                 , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
-                -- , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
-                --           (RecTy "b" (FuncTy Nat (RecVar "b")))
+                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) Top
                 ]
         of
             Left  err -> putStrLn err
@@ -80,7 +79,7 @@ data (:<) where
     Func    :: (:<) -> (:<) -> (:<)
     Prim    :: (:<)
     -- VarW    :: (:<)
-    Rec     :: Typ -> Typ -> (:<)
+    Rec     :: (:<) -> (:<)
     -- | only used during witness generation
     SubVar  :: Var -> (:<)
  deriving Show
@@ -125,7 +124,7 @@ substitute = do
     go m (Join x0 x1) = Join <$> go m x0 <*> go m x1
     go m (Func x0 x1) = Func <$> go m x0 <*> go m x1
     go m Prim = pure Prim
-    go m (Rec t1 t2) = pure (Rec t1 t2)
+    go m (Rec ty) = Rec <$> go m ty
     go m (SubVar c) = case M.lookup c m of
          Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> show m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
@@ -138,8 +137,8 @@ solveSub (Subtype Bot _) = []
 solveSub (Subtype t (Inter r s)) = [Subtype t r, Subtype t s]
 solveSub (Subtype (Union t s) r) = [Subtype t r, Subtype s r]
 solveSub (Subtype (FuncTy t s) (FuncTy t' s')) = [Subtype t' t, Subtype s s']
-solveSub (Subtype ty@(RecTy _ _) ty') = [Subtype (unfoldRecType ty) ty']
-solveSub (Subtype ty' ty@(RecTy _ _)) = [Subtype ty' (unfoldRecType ty)]
+solveSub (Subtype ty@RecTy{} ty') = [Subtype (unfoldRecType ty) ty']
+solveSub (Subtype ty' ty@RecTy{}) = [Subtype ty' (unfoldRecType ty)]
 solveSub (Subtype Nat Nat) = []
 solveSub (Subtype Int' Int') = []
 solveSub (Subtype Nat Int') = []
@@ -149,14 +148,6 @@ solveSub _ = error "Cannot solve constraint."
 -- using fresh witness variables in place for branches
 -- which will be substituted in later.
 solveSubWithWitness :: Constraint -> SolverM (:<)
-solveSubWithWitness (Subtype ty@(RecTy _ _) ty') = do
-    var <- freshVar
-    addTodos [(var, Subtype (unfoldRecType ty) ty')]
-    pure (Rec ty ty')
-solveSubWithWitness (Subtype ty' ty@(RecTy _ _)) = do
-    var <- freshVar
-    addTodos [(var, Subtype ty' (unfoldRecType ty))]
-    pure (Rec ty' ty)
 solveSubWithWitness (Subtype ty  Top        ) = pure (FromTop ty)
 solveSubWithWitness (Subtype Bot ty         ) = pure (ToBot ty)
 solveSubWithWitness (Subtype t   (Inter r s)) = do
@@ -169,6 +160,14 @@ solveSubWithWitness (Subtype (Union t s) r) = do
     var2 <- freshVar
     addTodos [(var1, Subtype t r), (var2, Subtype s r)]
     pure $ Join (SubVar var1) (SubVar var2)
+solveSubWithWitness (Subtype ty@(RecTy _ _) ty') = do
+    var <- freshVar
+    addTodos [(var, Subtype (unfoldRecType ty) ty')]
+    pure (Rec (SubVar var))
+solveSubWithWitness (Subtype ty' ty@(RecTy _ _)) = do
+    var <- freshVar
+    addTodos [(var, Subtype ty' (unfoldRecType ty))]
+    pure (Rec (SubVar var))
 solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
     var1 <- freshVar
     var2 <- freshVar
