@@ -83,11 +83,13 @@ data Constraint where
 solve :: [Constraint] -> SolverM ()
 solve [] = pure ()
 solve (c : cs) = do
-    w <- solveSubWithWitness c
-    var <- freshVar
-    addToCache c var w
-    solveTodos
-    solve cs
+    cacheHit <- inCache c
+    if cacheHit then solve cs else do
+      w <- solveSubWithWitness c
+      var <- freshVar
+      addToCache c var w
+      solveTodos
+      solve cs
 
 -- | Solve todos recursively.
 solveTodos :: SolverM ()
