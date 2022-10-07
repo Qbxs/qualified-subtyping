@@ -24,6 +24,9 @@ main =
                 [ Subtype Bot Top
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot)) Int'
+                , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
+                -- , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
+                --           (RecTy "b" (FuncTy Nat (RecVar "b")))
                 ]
         of
             Left  err -> putStrLn err
@@ -34,7 +37,7 @@ type SolverM a = StateT SolverState (Except String) a
 type Var = Char
 data SolverState = SolverState
     { ss_cache :: Map Constraint Var
-     -- ^ already solved constraints, indirectly points to known constraints via ss_known
+     -- ^ already solved constraints, indirectly points to subtyping witnesses via ss_known
     , ss_todos :: Map Var Constraint
     , -- ^ mapping from witness-var to constraint
       ss_known :: Map Var (:<)
@@ -56,12 +59,16 @@ generateWitnesses cs = verify =<< runSolverM (solve cs >> substitute)
         | otherwise          = Right (M.compose known cache)
 
 data Typ where
-    Top   :: Typ
-    Bot   :: Typ
-    Inter :: Typ -> Typ -> Typ
-    Union :: Typ -> Typ -> Typ
-    Int'  :: Typ
-    Nat   :: Typ
+    Top    :: Typ
+    Bot    :: Typ
+    Inter  :: Typ -> Typ -> Typ
+    Union  :: Typ -> Typ -> Typ
+    FuncTy :: Typ -> Typ -> Typ
+    Int'   :: Typ
+    Nat    :: Typ
+    -- UniVar :: String -> Typ
+    RecVar :: String -> Typ
+    RecTy  :: String -> Typ -> Typ
  deriving (Show, Eq, Ord)
 
 data (:<) where
@@ -70,9 +77,11 @@ data (:<) where
     ToBot   :: Typ -> (:<)
     Meet    :: (:<) -> (:<) -> (:<)
     Join    :: (:<) -> (:<) -> (:<)
+    Func    :: (:<) -> (:<) -> (:<)
     Prim    :: (:<)
-    -- RecVar  :: String -> (:<)
-    -- Rec     :: String -> (:<) -> (:<)
+    -- VarW    :: (:<)
+    Rec     :: Typ -> Typ -> (:<)
+    -- | only used during witness generation
     SubVar  :: Var -> (:<)
  deriving Show
 
@@ -114,7 +123,9 @@ substitute = do
     go m (ToBot ty) = pure (ToBot ty)
     go m (Meet x0 x1) = Meet <$> go m x0 <*> go m x1
     go m (Join x0 x1) = Join <$> go m x0 <*> go m x1
+    go m (Func x0 x1) = Func <$> go m x0 <*> go m x1
     go m Prim = pure Prim
+    go m (Rec t1 t2) = pure (Rec t1 t2)
     go m (SubVar c) = case M.lookup c m of
          Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> show m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
@@ -126,6 +137,9 @@ solveSub (Subtype _ Top) = []
 solveSub (Subtype Bot _) = []
 solveSub (Subtype t (Inter r s)) = [Subtype t r, Subtype t s]
 solveSub (Subtype (Union t s) r) = [Subtype t r, Subtype s r]
+solveSub (Subtype (FuncTy t s) (FuncTy t' s')) = [Subtype t' t, Subtype s s']
+solveSub (Subtype ty@(RecTy _ _) ty') = [Subtype (unfoldRecType ty) ty']
+solveSub (Subtype ty' ty@(RecTy _ _)) = [Subtype ty' (unfoldRecType ty)]
 solveSub (Subtype Nat Nat) = []
 solveSub (Subtype Int' Int') = []
 solveSub (Subtype Nat Int') = []
@@ -135,6 +149,14 @@ solveSub _ = error "Cannot solve constraint."
 -- using fresh witness variables in place for branches
 -- which will be substituted in later.
 solveSubWithWitness :: Constraint -> SolverM (:<)
+solveSubWithWitness (Subtype ty@(RecTy _ _) ty') = do
+    var <- freshVar
+    addTodos [(var, Subtype (unfoldRecType ty) ty')]
+    pure (Rec ty ty')
+solveSubWithWitness (Subtype ty' ty@(RecTy _ _)) = do
+    var <- freshVar
+    addTodos [(var, Subtype ty' (unfoldRecType ty))]
+    pure (Rec ty' ty)
 solveSubWithWitness (Subtype ty  Top        ) = pure (FromTop ty)
 solveSubWithWitness (Subtype Bot ty         ) = pure (ToBot ty)
 solveSubWithWitness (Subtype t   (Inter r s)) = do
@@ -147,6 +169,11 @@ solveSubWithWitness (Subtype (Union t s) r) = do
     var2 <- freshVar
     addTodos [(var1, Subtype t r), (var2, Subtype s r)]
     pure $ Join (SubVar var1) (SubVar var2)
+solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
+    var1 <- freshVar
+    var2 <- freshVar
+    addTodos [(var1, Subtype t' t), (var2, Subtype s s')]
+    pure $ Func (SubVar var1) (SubVar var2)
 solveSubWithWitness (Subtype Nat  Nat ) = pure (Refl Nat)
 solveSubWithWitness (Subtype Int' Int') = pure (Refl Int')
 solveSubWithWitness (Subtype Nat  Int') = pure Prim
@@ -184,3 +211,20 @@ addToCache c var w = modify $ \(SolverState cache todos known fresh) -> SolverSt
     todos
     (M.insert var w known)
     fresh
+
+unfoldRecType :: Typ -> Typ
+unfoldRecType rc@(RecTy var ty) = substituteRecVar var rc ty
+unfoldRecType ty = ty
+
+substituteRecVar :: String -> Typ -> Typ -> Typ
+substituteRecVar var ty (RecVar var') | var == var' = ty
+                                      | otherwise   = RecVar var'
+substituteRecVar var ty (Inter t1 t2) =
+    Inter (substituteRecVar var ty t1) (substituteRecVar var ty t2)
+substituteRecVar var ty (Union t1 t2) =
+    Union (substituteRecVar var ty t1) (substituteRecVar var ty t2)
+substituteRecVar var ty (FuncTy t1 t2) =
+    FuncTy (substituteRecVar var ty t1) (substituteRecVar var ty t2)
+substituteRecVar var ty (RecTy var' ty') =
+    RecTy var' (substituteRecVar var ty ty') -- WARNING: capture free substitution does not work
+substituteRecVar _ _ ty' = ty'
