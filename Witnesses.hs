@@ -21,12 +21,18 @@ main =
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot)) Int'
                 , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
-                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (RecTy "a" (FuncTy Nat (RecVar "a")))
+                -- not terminating example :(
+                -- , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
+                --           (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
                 ]
         of
             Left  err -> putStrLn err
-            Right sol -> print sol
+            Right sol -> do
+                print sol
+                putStrLn $ "Sanity test: " ++ show (M.mapWithKey (\k val -> reconstruct val == k) sol)
 
+-- | Reconstruct a constraint from a subtyping witness
+--   for showing that constraints are isomorphic to their witnesses.
 reconstruct :: (:<) -> Constraint
 reconstruct (Refl    ty) = Subtype ty ty
 reconstruct (FromTop ty) = Subtype ty Top
@@ -73,7 +79,7 @@ generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
 generateWitnesses cs = composeCache <$> runSolverM (solve cs >> substitute)
   where
     composeCache (SolverState cache known _) = M.compose known cache
-       
+
 data Typ where
     Top    :: Typ
     Bot    :: Typ
@@ -113,7 +119,7 @@ solve (c : css) = do
     if cacheHit then solve css else do
       var <- freshVar
       (w, cs) <- solveSubWithWitness c
-      addToCache c var w
+      addToKnown c var w
       mapM_ (uncurry solveWithVar) cs
       solve css
 
@@ -123,7 +129,7 @@ solveWithVar var c = do
     cacheHit <- inCache c
     unless cacheHit $ do
       (w, cs) <- solveSubWithWitness c
-      addToCache c var w
+      addToKnown c var w
       mapM_ (uncurry solveWithVar) cs
 
 -- | Substitute known witnesses for generated witness variables.
@@ -211,6 +217,7 @@ fromCacheOrFresh c = do
     case M.lookup c cache of
         Nothing -> do
             var <- freshVar
+            -- addToCache c var
             pure (var, c)
         Just var -> pure (var, c)
 
@@ -220,10 +227,17 @@ inCache :: Constraint -> SolverM Bool
 inCache c =  gets $ M.member c . ss_cache
 
 -- | Add solved constraint to cache and known witnesses.
-addToCache :: Constraint -> Var -> (:<) -> SolverM ()
-addToCache c var w = modify $ \(SolverState cache known fresh) -> SolverState
+addToKnown :: Constraint -> Var -> (:<) -> SolverM ()
+addToKnown c var w = modify $ \(SolverState cache known fresh) -> SolverState
     (M.insert c var cache)
     (M.insert var w known)
+    fresh
+
+-- | Add solved constraint to cache and known witnesses.
+addToCache :: Constraint -> Var -> SolverM ()
+addToCache c var = modify $ \(SolverState cache known fresh) -> SolverState
+    (M.insert c var cache)
+    known
     fresh
 
 unfoldRecType :: Typ -> Typ
