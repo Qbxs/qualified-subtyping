@@ -118,8 +118,9 @@ solve (c : css) = do
     cacheHit <- inCache c
     if cacheHit then solve css else do
       var <- freshVar
+      addToCache c var
       (w, cs) <- solveSubWithWitness c
-      addToKnown c var w
+      addToKnown var w
       mapM_ (uncurry solveWithVar) cs
       solve css
 
@@ -128,8 +129,9 @@ solveWithVar :: Var -> Constraint -> SolverM ()
 solveWithVar var c = do
     cacheHit <- inCache c
     unless cacheHit $ do
+      addToCache c var
       (w, cs) <- solveSubWithWitness c
-      addToKnown c var w
+      addToKnown var w
       mapM_ (uncurry solveWithVar) cs
 
 -- | Substitute known witnesses for generated witness variables.
@@ -227,9 +229,9 @@ inCache :: Constraint -> SolverM Bool
 inCache c =  gets $ M.member c . ss_cache
 
 -- | Add solved constraint to cache and known witnesses.
-addToKnown :: Constraint -> Var -> (:<) -> SolverM ()
-addToKnown c var w = modify $ \(SolverState cache known fresh) -> SolverState
-    (M.insert c var cache)
+addToKnown :: Var -> (:<) -> SolverM ()
+addToKnown var w = modify $ \(SolverState cache known fresh) -> SolverState
+    cache
     (M.insert var w known)
     fresh
 
