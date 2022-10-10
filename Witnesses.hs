@@ -31,6 +31,31 @@ main =
             Left  err -> putStrLn err
             Right sol -> print sol
 
+reconstruct :: (:<) -> Constraint
+reconstruct (Refl    ty) = Subtype ty ty
+reconstruct (FromTop ty) = Subtype ty Top
+reconstruct (ToBot   ty) = Subtype Bot ty
+reconstruct (Meet w1 w2) =
+    let (Subtype t s) = reconstruct w1
+        (Subtype r v) = reconstruct w2
+    in  if t /= r
+            then error ("Different subtypes: " <> show t <> " and " <> show r)
+            else Subtype t (Inter s v)
+reconstruct (Join w1 w2) =
+    let (Subtype t s) = reconstruct w1
+        (Subtype r v) = reconstruct w2
+    in  if s /= v
+            then error ("Different supertypes: " <> show s <> " and " <> show v)
+            else Subtype (Union t r) s
+reconstruct (Func w1 w2) =
+    let (Subtype t s) = reconstruct w1
+        (Subtype r v) = reconstruct w2
+    in  Subtype (FuncTy r t) (FuncTy s v)
+reconstruct Prim = Subtype Nat Int'
+reconstruct (Rec w) =
+    let (Subtype t s) = reconstruct w in error "rec cannot be reconstructed yet"
+reconstruct SubVar{} = error "subvar should not occur"
+
 type SolverM a = StateT SolverState (Except String) a
 
 type Var = Char
