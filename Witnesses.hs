@@ -181,16 +181,10 @@ solveSubWithWitness :: Constraint -> SolverM ((:<), [(Var, Constraint)])
 solveSubWithWitness (Subtype ty  Top        ) = pure (FromTop ty, [])
 solveSubWithWitness (Subtype Bot ty         ) = pure (ToBot ty, [])
 solveSubWithWitness (Subtype t   (Inter r s)) = do
-    -- c1@(var1, _) <- fromCacheOrFresh (Subtype t r)
-    -- c2@(var2, _) <- fromCacheOrFresh (Subtype t s)
-    cs <- fromCacheOrFresh2 (Subtype t r) (Subtype t s)
-    let [c1@(var1, _), c2@(var2, _)] = cs
+    (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t r) (Subtype t s)
     pure (Meet (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype (Union t s) r) = do
-    -- c1@(var1, _) <- fromCacheOrFresh (Subtype t r)
-    -- c2@(var2, _) <- fromCacheOrFresh (Subtype s r)
-    cs <- fromCacheOrFresh2 (Subtype t r) (Subtype s r)
-    let [c1@(var1, _), c2@(var2, _)] = cs
+    (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t r) (Subtype s r)
     pure (Join (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype ty@(RecTy _ _) ty') = do
     -- cacheHit <- inCache (Subtype (unfoldRecType ty) ty')
@@ -203,10 +197,7 @@ solveSubWithWitness (Subtype ty' ty@(RecTy _ _)) = do
     c@(var, _) <- fromCacheOrFresh (Subtype ty' (unfoldRecType ty))
     pure (Rec (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
-    -- c1@(var1, _) <- fromCacheOrFresh (Subtype t' t)
-    -- c2@(var2, _) <- fromCacheOrFresh (Subtype s s')
-    cs <- fromCacheOrFresh2 (Subtype t' t) (Subtype s s')
-    let [c1@(var1, _), c2@(var2, _)] = cs
+    (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t' t) (Subtype s s')
     pure (Func (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype Nat  Nat ) = pure (Refl Nat, [])
 solveSubWithWitness (Subtype Int' Int') = pure (Refl Int', [])
@@ -238,12 +229,12 @@ fromCacheOrFresh c = do
         Just var -> pure (var, Nothing)
 
 -- | Check constraints for equality in order not to generate witness vars for equal constraints.
-fromCacheOrFresh2 :: Constraint -> Constraint -> SolverM [(Var, Maybe Constraint)]
-fromCacheOrFresh2 c1 c2 | c1 == c2 = (\[c] -> [c,c]) . pure <$> fromCacheOrFresh c1
+fromCacheOrFresh2 :: Constraint -> Constraint -> SolverM ((Var, Maybe Constraint), (Var, Maybe Constraint))
+fromCacheOrFresh2 c1 c2 | c1 == c2 = (\c -> (c,c)) <$> fromCacheOrFresh c1
                         | otherwise = do
                             c1 <- fromCacheOrFresh c1
                             c2 <- fromCacheOrFresh c2
-                            pure [c1, c2]
+                            pure (c1, c2)
 
 -- | Collapse constraints
 catConstraints :: [(Var, Maybe Constraint)] -> [(Var, Constraint)]
