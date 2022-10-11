@@ -18,15 +18,17 @@ main =
     case
             generateWitnesses
                 [ Subtype Bot Top
+                -- variable clash due to identical subconstraints
+                -- , Subtype Nat (Inter Top Top)
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot)) Int'
                 , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
                 -- not terminating example :(
-                -- , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
-                --           (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
+                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
+                          (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
                 ]
         of
-            Left  err -> putStrLn err
+            Left  err -> error err
             Right sol -> do
                 print sol
                 putStrLn $ "Sanity test: " ++ show (M.mapWithKey (\k val -> reconstruct val == k) sol)
@@ -125,6 +127,7 @@ solve (c : css) = do
       solve css
 
 -- | Same as /solve/ but don't generate a new witness var.
+--   Used for subwitnesses that have already a witness var assigned.
 solveWithVar :: Var -> Constraint -> SolverM ()
 solveWithVar var c = do
     cacheHit <- inCache c
@@ -179,21 +182,25 @@ solveSubWithWitness (Subtype Bot ty         ) = pure (ToBot ty, [])
 solveSubWithWitness (Subtype t   (Inter r s)) = do
     c1@(var1, _) <- fromCacheOrFresh (Subtype t r)
     c2@(var2, _) <- fromCacheOrFresh (Subtype t s)
-    pure (Meet (SubVar var1) (SubVar var2), [c1, c2])
+    pure (Meet (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype (Union t s) r) = do
     c1@(var1, _) <- fromCacheOrFresh (Subtype t r)
     c2@(var2, _) <- fromCacheOrFresh (Subtype s r)
-    pure (Join (SubVar var1) (SubVar var2), [c1, c2])
+    pure (Join (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype ty@(RecTy _ _) ty') = do
+    -- cacheHit <- inCache (Subtype (unfoldRecType ty) ty')
+    -- when cacheHit $ get >>= throwError . (++) (show (Subtype (unfoldRecType ty) ty')) . take 1000 . show
     c@(var, _) <- fromCacheOrFresh (Subtype (unfoldRecType ty) ty')
-    pure (Rec (SubVar var), [c])
+    pure (Rec (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype ty' ty@(RecTy _ _)) = do
+    -- cacheHit <- inCache (Subtype ty' (unfoldRecType ty))
+    -- when cacheHit $ get >>= throwError . (++) (show (Subtype ty' (unfoldRecType ty))) . take 1000 . show
     c@(var, _) <- fromCacheOrFresh (Subtype ty' (unfoldRecType ty))
-    pure (Rec (SubVar var), [c])
+    pure (Rec (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
     c1@(var1, _) <- fromCacheOrFresh (Subtype t' t)
     c2@(var2, _) <- fromCacheOrFresh (Subtype s s')
-    pure (Func (SubVar var1) (SubVar var2), [c1, c2])
+    pure (Func (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype Nat  Nat ) = pure (Refl Nat, [])
 solveSubWithWitness (Subtype Int' Int') = pure (Refl Int', [])
 solveSubWithWitness (Subtype Nat  Int') = pure (Prim, [])
@@ -212,17 +219,22 @@ freshVar = do
             -> SolverState todos known rest
     pure var
 
--- | Get already solved constraint or generate new var.
-fromCacheOrFresh :: Constraint -> SolverM (Var, Constraint)
+-- | Get var for already solved constraint and /Nohting/
+--   or generate new var and /Just/ constraint.
+fromCacheOrFresh :: Constraint -> SolverM (Var, Maybe Constraint)
 fromCacheOrFresh c = do
     cache <- gets ss_cache
     case M.lookup c cache of
         Nothing -> do
-            var <- freshVar
-            -- addToCache c var
-            pure (var, c)
-        Just var -> pure (var, c)
+            newVar <- freshVar
+            pure (newVar, Just c)
+        Just var -> pure (var, Nothing)
 
+-- | Collapse constraints
+catConstraints :: [(Var, Maybe Constraint)] -> [(Var, Constraint)]
+catConstraints [] = []
+catConstraints ((var, Nothing):cs) = catConstraints cs
+catConstraints ((var, Just c):cs) = (var, c) : catConstraints cs
 
 -- | Check whether constraint is already solved.
 inCache :: Constraint -> SolverM Bool
