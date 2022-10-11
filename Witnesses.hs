@@ -63,7 +63,7 @@ reconstruct (UnfoldL recVar w) =
 reconstruct (UnfoldR recVar w) =
     let (Subtype t s) = reconstruct w
     in  Subtype (fromMaybe (error $ "no rectype found in " ++ show t) (getRecType recVar t)) s
-reconstruct (Fix ty) = Subtype ty ty
+reconstruct (Fix c) = c
 reconstruct SubVar{} = error "subvar should not occur"
 
 type SolverM a = StateT SolverState (Except String) a
@@ -112,7 +112,7 @@ data (:<) where
     -- VarW    :: (:<)
     UnfoldL :: String -> (:<) -> (:<)
     UnfoldR :: String -> (:<) -> (:<)
-    Fix     :: Typ -> (:<)
+    Fix     :: Constraint -> (:<)
     -- | only used during witness generation
     SubVar  :: Var -> (:<)
  deriving Show
@@ -196,15 +196,17 @@ solveSubWithWitness (Subtype (Union t s) r) = do
     (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t r) (Subtype s r)
     pure (Join (SubVar var1) (SubVar var2), catConstraints [c1, c2])
 solveSubWithWitness (Subtype ty@(RecTy recVar _) ty') = do
-    cacheHit <- inCache (Subtype (unfoldRecType ty) ty')
-    if cacheHit then pure (Fix (unfoldRecType ty), []) else do
-    c@(var, _) <- fromCacheOrFresh (Subtype (unfoldRecType ty) ty')
-    pure (UnfoldL recVar (SubVar var), catConstraints [c])
+    let subc = Subtype (unfoldRecType ty) ty'
+    cacheHit <- inCache subc
+    if cacheHit then pure (Fix subc, []) else do
+      c@(var, _) <- fromCacheOrFresh subc
+      pure (UnfoldL recVar (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype ty' ty@(RecTy recVar _)) = do
-    cacheHit <- inCache (Subtype ty' (unfoldRecType ty))
-    if cacheHit then pure (Fix (unfoldRecType ty), []) else do
-    c@(var, _) <- fromCacheOrFresh (Subtype ty' (unfoldRecType ty))
-    pure (UnfoldR recVar (SubVar var), catConstraints [c])
+    let subc = Subtype ty' (unfoldRecType ty)
+    cacheHit <- inCache subc
+    if cacheHit then pure (Fix subc, []) else do
+      c@(var, _) <- fromCacheOrFresh subc
+      pure (UnfoldR recVar (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
     (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t' t) (Subtype s s')
     pure (Func (SubVar var1) (SubVar var2), catConstraints [c1, c2])
@@ -294,3 +296,9 @@ substituteRecVar var ty (FuncTy t1 t2) =
 substituteRecVar var ty (RecTy var' ty') =
     RecTy var' (substituteRecVar var ty ty') -- WARNING: capture free substitution does not work
 substituteRecVar _ _ ty' = ty'
+
+-- fromList [(Subtype Bot Top,FromTop Bot),(Subtype Bot Int',ToBot Int'),(Subtype (Union Int' (Union Nat Bot)) Int',Join (Refl Int') (Join Prim (ToBot Int'))),(Subtype (Union Nat Bot) Int',Join Prim (ToBot Int')),(Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int'),Func (Meet (FromTop Nat) Prim) Prim),(Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))),Func (Refl Nat) (UnfoldL "a" (Fix (Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))))))),(Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (RecTy "a" (FuncTy Nat (RecVar "a"))),Fix (Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))))),(Subtype Int' Int',Refl Int'),(Subtype Nat Top,FromTop Nat),(Subtype Nat (Inter Top Top),Meet (FromTop Nat) (FromTop Nat)),(Subtype Nat (Inter Top Int'),Meet (FromTop Nat) Prim),(Subtype Nat (Inter Top Nat),Meet (FromTop Nat) (Refl Nat)),(Subtype Nat (Inter (Inter Top Nat) Int'),Meet (Meet (FromTop Nat) (Refl Nat)) Prim),(Subtype Nat Int',Prim),(Subtype Nat Nat,Refl Nat),
+-- (Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))),UnfoldL "a" (Func (Refl Nat) (UnfoldL "a" (Fix (Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))))))))
+-- ,(Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (RecTy "a" (FuncTy Nat (RecVar "a"))),UnfoldL "a" (Fix (Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))))))]
+-- Sanity test: fromList [(Subtype Bot Top,True),(Subtype Bot Int',True),(Subtype (Union Int' (Union Nat Bot)) Int',True),(Subtype (Union Nat Bot) Int',True),(Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int'),True),(Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))),False),(Subtype (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))) (RecTy "a" (FuncTy Nat (RecVar "a"))),False),(Subtype Int' Int',True),(Subtype Nat Top,True),(Subtype Nat (Inter Top Top),True),(Subtype Nat (Inter Top Int'),True),(Subtype Nat (Inter Top Nat),True),(Subtype Nat (Inter (Inter Top Nat) Int'),True),(Subtype Nat Int',True),(Subtype Nat Nat,True),(Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a")))),False),(Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (RecTy "a" (FuncTy Nat (RecVar "a"))),False)]
+-- All true? False
