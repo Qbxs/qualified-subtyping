@@ -9,6 +9,7 @@ module Witnesses
 
 import           Control.Monad.Except
 import           Control.Monad.State
+import GHC.Base (Alternative(..))
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
 import           Data.Tuple                     ( swap, uncurry )
@@ -22,9 +23,8 @@ main =
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot)) Int'
                 , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
-                -- not terminating example :(
-                -- , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
-                --           (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
+                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
+                          (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
                 ]
         of
             Left  err -> error err
@@ -57,8 +57,9 @@ reconstruct (Func w1 w2) =
         (Subtype r v) = reconstruct w2
     in  Subtype (FuncTy s t) (FuncTy r v)
 reconstruct Prim = Subtype Nat Int'
-reconstruct (Rec w) =
-    let (Subtype t s) = reconstruct w in error "rec cannot be reconstructed yet"
+reconstruct (UnfoldL recVar w) = reconstruct w
+reconstruct (UnfoldR recVar w) = reconstruct w
+reconstruct (Fix ty) = Subtype ty ty
 reconstruct SubVar{} = error "subvar should not occur"
 
 type SolverM a = StateT SolverState (Except String) a
@@ -105,7 +106,9 @@ data (:<) where
     Func    :: (:<) -> (:<) -> (:<)
     Prim    :: (:<)
     -- VarW    :: (:<)
-    Rec     :: (:<) -> (:<)
+    UnfoldL :: String -> (:<) -> (:<)
+    UnfoldR :: String -> (:<) -> (:<)
+    Fix     :: Typ -> (:<)
     -- | only used during witness generation
     SubVar  :: Var -> (:<)
  deriving Show
@@ -154,7 +157,9 @@ substitute = do
     go m (Join x0 x1) = Join <$> go m x0 <*> go m x1
     go m (Func x0 x1) = Func <$> go m x0 <*> go m x1
     go m Prim = pure Prim
-    go m (Rec ty) = Rec <$> go m ty
+    go m (UnfoldL recVar ty) = UnfoldL recVar <$> go m ty
+    go m (UnfoldR recVar ty) = UnfoldR recVar <$> go m ty
+    go m (Fix ty) = pure (Fix ty)
     go m (SubVar c) = case M.lookup c m of
          Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> show m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
@@ -186,16 +191,16 @@ solveSubWithWitness (Subtype t   (Inter r s)) = do
 solveSubWithWitness (Subtype (Union t s) r) = do
     (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t r) (Subtype s r)
     pure (Join (SubVar var1) (SubVar var2), catConstraints [c1, c2])
-solveSubWithWitness (Subtype ty@(RecTy _ _) ty') = do
-    -- cacheHit <- inCache (Subtype (unfoldRecType ty) ty')
-    -- when cacheHit $ get >>= throwError . (++) (show (Subtype (unfoldRecType ty) ty')) . take 1000 . show
+solveSubWithWitness (Subtype ty@(RecTy recVar _) ty') = do
+    cacheHit <- inCache (Subtype (unfoldRecType ty) ty')
+    if cacheHit then pure (Fix (unfoldRecType ty), []) else do
     c@(var, _) <- fromCacheOrFresh (Subtype (unfoldRecType ty) ty')
-    pure (Rec (SubVar var), catConstraints [c])
-solveSubWithWitness (Subtype ty' ty@(RecTy _ _)) = do
-    -- cacheHit <- inCache (Subtype ty' (unfoldRecType ty))
-    -- when cacheHit $ get >>= throwError . (++) (show (Subtype ty' (unfoldRecType ty))) . take 1000 . show
+    pure (UnfoldL recVar (SubVar var), catConstraints [c])
+solveSubWithWitness (Subtype ty' ty@(RecTy recVar _)) = do
+    cacheHit <- inCache (Subtype ty' (unfoldRecType ty))
+    if cacheHit then pure (Fix (unfoldRecType ty), []) else do
     c@(var, _) <- fromCacheOrFresh (Subtype ty' (unfoldRecType ty))
-    pure (Rec (SubVar var), catConstraints [c])
+    pure (UnfoldR recVar (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
     (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t' t) (Subtype s s')
     pure (Func (SubVar var1) (SubVar var2), catConstraints [c1, c2])
@@ -260,9 +265,18 @@ addToCache c var = modify $ \(SolverState cache known fresh) -> SolverState
     known
     fresh
 
+-- | Unfold a recursive type once.
 unfoldRecType :: Typ -> Typ
 unfoldRecType rc@(RecTy var ty) = substituteRecVar var rc ty
 unfoldRecType ty = ty
+
+-- | Partial inverse of /unfoldRecType/.
+foldRecType :: Typ -> Maybe Typ
+foldRecType (FuncTy t1 t2) = foldRecType t1 <|> foldRecType t2
+foldRecType (Union t1 t2) = foldRecType t1 <|> foldRecType t2
+foldRecType (Inter t1 t2) = foldRecType t1 <|> foldRecType t2
+foldRecType rc@RecTy{} = pure rc
+foldRecType ty = pure ty
 
 substituteRecVar :: String -> Typ -> Typ -> Typ
 substituteRecVar var ty (RecVar var') | var == var' = ty
