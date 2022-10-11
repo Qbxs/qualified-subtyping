@@ -9,7 +9,7 @@ module Witnesses
 
 import           Control.Monad.Except
 import           Control.Monad.State
-import GHC.Base (Alternative(..))
+import           GHC.Base                       ( Alternative(..) )
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
 import           Data.Tuple                     ( swap, uncurry )
