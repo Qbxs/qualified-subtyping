@@ -13,6 +13,7 @@ import           GHC.Base                       ( Alternative(..) )
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
 import           Data.Tuple                     ( swap, uncurry )
+import Data.Maybe (fromMaybe)
 
 main :: IO ()
 main =
@@ -23,8 +24,7 @@ main =
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot)) Int'
                 , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
-                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a")))
-                          (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
+                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
                 ]
         of
             Left  err -> error err
@@ -57,8 +57,12 @@ reconstruct (Func w1 w2) =
         (Subtype r v) = reconstruct w2
     in  Subtype (FuncTy s t) (FuncTy r v)
 reconstruct Prim = Subtype Nat Int'
-reconstruct (UnfoldL recVar w) = reconstruct w
-reconstruct (UnfoldR recVar w) = reconstruct w
+reconstruct (UnfoldL recVar w) =
+    let (Subtype t s) = reconstruct w
+    in  Subtype t (fromMaybe (error $ "no rectype found in " ++ show s) (getRecType recVar s))
+reconstruct (UnfoldR recVar w) =
+    let (Subtype t s) = reconstruct w
+    in  Subtype (fromMaybe (error $ "no rectype found in " ++ show t) (getRecType recVar t)) s
 reconstruct (Fix ty) = Subtype ty ty
 reconstruct SubVar{} = error "subvar should not occur"
 
@@ -271,12 +275,12 @@ unfoldRecType rc@(RecTy var ty) = substituteRecVar var rc ty
 unfoldRecType ty = ty
 
 -- | Partial inverse of /unfoldRecType/.
-foldRecType :: Typ -> Maybe Typ
-foldRecType (FuncTy t1 t2) = foldRecType t1 <|> foldRecType t2
-foldRecType (Union t1 t2) = foldRecType t1 <|> foldRecType t2
-foldRecType (Inter t1 t2) = foldRecType t1 <|> foldRecType t2
-foldRecType rc@RecTy{} = pure rc
-foldRecType ty = pure ty
+getRecType :: String -> Typ -> Maybe Typ
+getRecType varRec (FuncTy t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
+getRecType varRec (Union t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
+getRecType varRec (Inter t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
+getRecType varRec rc@(RecTy varRec' _) = if varRec == varRec' then pure rc else Nothing
+getRecType varRec ty = Nothing
 
 substituteRecVar :: String -> Typ -> Typ -> Typ
 substituteRecVar var ty (RecVar var') | var == var' = ty
