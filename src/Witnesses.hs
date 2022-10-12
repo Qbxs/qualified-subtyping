@@ -38,9 +38,9 @@ reconstruct (Join w1 w2) =
             then error ("Different supertypes: " <> show s <> " and " <> show v)
             else Subtype (Union t r) s
 reconstruct (Func w1 w2) =
-    let (Subtype t s) = reconstruct w1
-        (Subtype t' s') = reconstruct w2
-    in  Subtype (FuncTy t' t) (FuncTy s s')
+    let (Subtype t' t) = reconstruct w1
+        (Subtype s s') = reconstruct w2
+    in  Subtype (FuncTy t s) (FuncTy t' s')
 reconstruct Prim = Subtype Nat Int'
 reconstruct (UnfoldL recVar w) =
     let (Subtype t s) = reconstruct w
