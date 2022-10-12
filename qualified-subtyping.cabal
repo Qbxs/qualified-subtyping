@@ -21,7 +21,7 @@ library
   exposed-modules:     Witnesses
   -- other-modules:
   -- other-extensions:
-  build-depends:       base >=4.14 && <4.17
+  build-depends:       base >=4.14 && <=4.17
                      , mtl
                      , containers
                      , pretty-show
@@ -32,7 +32,7 @@ executable qualified-subtyping
   main-is:             Main.hs
   other-modules:       Witnesses
   -- other-extensions:
-  build-depends:       base >=4.14 && <4.17
+  build-depends:       base >=4.14 && <=4.17
                      , mtl
                      , containers
                      , pretty-show
