@@ -39,15 +39,15 @@ reconstruct (Join w1 w2) =
             else Subtype (Union t r) s
 reconstruct (Func w1 w2) =
     let (Subtype t s) = reconstruct w1
-        (Subtype r v) = reconstruct w2
-    in  Subtype (FuncTy s t) (FuncTy r v)
+        (Subtype t' s') = reconstruct w2
+    in  Subtype (FuncTy t' t) (FuncTy s s')
 reconstruct Prim = Subtype Nat Int'
 reconstruct (UnfoldL recVar w) =
     let (Subtype t s) = reconstruct w
-    in  Subtype t (fromMaybe (error $ "no rectype found in " ++ show s) (getRecType recVar s))
+    in  Subtype (fromMaybe (error $ "no rectype found in " ++ show t) (getRecType recVar t)) s
 reconstruct (UnfoldR recVar w) =
     let (Subtype t s) = reconstruct w
-    in  Subtype (fromMaybe (error $ "no rectype found in " ++ show t) (getRecType recVar t)) s
+    in  Subtype t (fromMaybe (error $ "no rectype found in " ++ show s) (getRecType recVar s))
 reconstruct (Fix c) = c
 reconstruct SubVar{} = error "subvar should not occur"
 
@@ -203,13 +203,13 @@ solveSubWithWitness (Subtype (Union t s) r) = do
 solveSubWithWitness (Subtype ty@(RecTy recVar _) ty') = do
     let subc = Subtype (unfoldRecType ty) ty'
     cacheHit <- inCache subc
-    if cacheHit then pure (Fix subc, []) else do
+    if cacheHit then pure (UnfoldL recVar (Fix subc), []) else do
       c@(var, _) <- fromCacheOrFresh subc
       pure (UnfoldL recVar (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype ty' ty@(RecTy recVar _)) = do
     let subc = Subtype ty' (unfoldRecType ty)
     cacheHit <- inCache subc
-    if cacheHit then pure (Fix subc, []) else do
+    if cacheHit then pure (UnfoldR recVar (Fix subc), []) else do
       c@(var, _) <- fromCacheOrFresh subc
       pure (UnfoldR recVar (SubVar var), catConstraints [c])
 solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
@@ -288,7 +288,9 @@ getRecType :: String -> Typ -> Maybe Typ
 getRecType varRec (FuncTy t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
 getRecType varRec (Union t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
 getRecType varRec (Inter t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
-getRecType varRec rc@(RecTy varRec' _) = if varRec == varRec' then pure rc else Nothing
+getRecType varRec rc@(RecTy varRec' ty) = if varRec == varRec'
+                                          then pure rc
+                                          else RecTy varRec' <$> getRecType varRec ty
 getRecType varRec ty = Nothing
 
 substituteRecVar :: String -> Typ -> Typ -> Typ
