@@ -38,9 +38,9 @@ reconstruct (Join w1 w2) =
             then error ("Different supertypes: " <> show s <> " and " <> show v)
             else Subtype (Union t r) s
 reconstruct (Func w1 w2) =
-    let (Subtype t s) = reconstruct w1
-        (Subtype t' s') = reconstruct w2
-    in  Subtype (FuncTy t' t) (FuncTy s s')
+    let (Subtype t' t) = reconstruct w1
+        (Subtype s s') = reconstruct w2
+    in  Subtype (FuncTy t s) (FuncTy t' s')
 reconstruct Prim = Subtype Nat Int'
 reconstruct (UnfoldL recVar w) =
     let (Subtype t s) = reconstruct w
@@ -61,17 +61,23 @@ data SolverState = SolverState
      -- ^ mapping from witness-var to witness
     , ss_fresh :: [Var]
       -- ^ "stream" of fresh variables
-    }
- deriving Show
+    , ss_vars  :: Map String VarState
+      -- ^ mapping from UniVars to their bounds
+    } deriving Show
+
+data VarState = VarState
+    { vs_upperbounds :: [Typ]
+    , vs_lowerbounds :: [Typ]
+    } deriving Show
 
 runSolverM :: SolverM a -> Either String SolverState
-runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty M.empty ['a' ..]))
+runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty M.empty ['a' ..] (M.singleton "u0" (VarState [] []))))
 
 -- | Generate subtyping witnesses for subtyping constraints.
 generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
 generateWitnesses cs = composeCache <$> runSolverM (solve cs >> substitute)
   where
-    composeCache (SolverState cache known _) = M.compose known cache
+    composeCache (SolverState cache known _ _) = M.compose known cache
 
 data Typ where
     Top    :: Typ
@@ -81,7 +87,7 @@ data Typ where
     FuncTy :: Typ -> Typ -> Typ
     Int'   :: Typ
     Nat    :: Typ
-    -- UniVar :: String -> Typ
+    UniVar :: String -> Typ
     RecVar :: String -> Typ
     RecTy  :: String -> Typ -> Typ
  deriving (Show, Eq, Ord)
@@ -114,10 +120,24 @@ solve (c : css) = do
     if cacheHit then solve css else do
       var <- freshVar
       addToCache c var
-      (w, cs) <- solveSubWithWitness c
-      addToKnown var w
-      mapM_ (uncurry solveWithVar) cs
-      solve css
+      case c of
+        (Subtype (UniVar uvl) tvu@(UniVar uvu)) ->
+          if uvl == uvu
+          then solve css
+          else do
+            newCss <- addUpperBounds uvl tvu
+            solve (newCss ++ css)
+        (Subtype (UniVar uv) ub) -> do
+          newCss <- addUpperBounds uv ub
+          solve (newCss ++ css)
+        (Subtype lb (UniVar uv)) -> do
+          newCss <- addLowerBounds uv lb
+          solve (newCss ++ css)
+        _ -> do
+          (w, cs) <- solveSubWithWitness c
+          addToKnown var w
+          mapM_ (uncurry solveWithVar) cs
+          solve css
 
 -- | Same as /solve/ but don't generate a new witness var.
 --   Used for subwitnesses that have already a witness var assigned.
@@ -135,8 +155,8 @@ substitute :: SolverM ()
 substitute = do
     ws <- gets ss_known
     coalesced <- mapM (go ws) ws
-    modify $ \(SolverState todos _ fresh)
-            -> SolverState todos coalesced fresh
+    modify $ \(SolverState cache _ fresh vars)
+            -> SolverState cache coalesced fresh vars
   where
     go :: Map Var (:<) -> (:<) -> SolverM (:<)
     go m (Refl ty) = pure (Refl ty)
@@ -209,8 +229,8 @@ freshVar :: SolverM Var
 freshVar = do
     stream <- gets ss_fresh
     let (var : rest) = stream
-    modify $ \(SolverState todos known _)
-            -> SolverState todos known rest
+    modify $ \(SolverState todos known _ vars)
+            -> SolverState todos known rest vars
     pure var
 
 -- | Get var for already solved constraint and /Nohting/
@@ -244,17 +264,19 @@ inCache c =  gets $ M.member c . ss_cache
 
 -- | Add solved constraint to cache and known witnesses.
 addToKnown :: Var -> (:<) -> SolverM ()
-addToKnown var w = modify $ \(SolverState cache known fresh) -> SolverState
+addToKnown var w = modify $ \(SolverState cache known fresh vars) -> SolverState
     cache
     (M.insert var w known)
     fresh
+    vars
 
 -- | Add solved constraint to cache and known witnesses.
 addToCache :: Constraint -> Var -> SolverM ()
-addToCache c var = modify $ \(SolverState cache known fresh) -> SolverState
+addToCache c var = modify $ \(SolverState cache known fresh vars) -> SolverState
     (M.insert c var cache)
     known
     fresh
+    vars
 
 -- | Unfold a recursive type once.
 unfoldRecType :: Typ -> Typ
@@ -283,3 +305,27 @@ substituteRecVar var ty (FuncTy t1 t2) =
 substituteRecVar var ty (RecTy var' ty') =
     RecTy var' (substituteRecVar var ty ty') -- WARNING: capture free substitution does not work
 substituteRecVar _ _ ty' = ty'
+
+modifyBounds :: (VarState -> VarState) -> String -> SolverM ()
+modifyBounds f uv = modify (\(SolverState cache known fresh vars) -> SolverState cache known fresh (M.adjust f uv vars))
+
+getBounds :: String -> SolverM VarState
+getBounds uv = do
+  bounds <- gets ss_vars
+  case M.lookup uv bounds of
+    Nothing -> throwError $ "Tried to retrieve bounds for variable:" ++ uv
+    Just vs -> return vs
+
+addLowerBounds :: String -> Typ -> SolverM [Constraint]
+addLowerBounds uv ty = do
+  modifyBounds (\(VarState ubs lbs) -> VarState ubs (ty:lbs)) uv
+  bounds <- getBounds uv
+  let ubs = vs_upperbounds bounds
+  return [Subtype ty ub | ub <- ubs]
+
+addUpperBounds :: String -> Typ -> SolverM [Constraint]
+addUpperBounds uv ty = do
+  modifyBounds (\(VarState ubs lbs) -> VarState (ty:ubs) lbs) uv
+  bounds <- getBounds uv
+  let lbs = vs_lowerbounds bounds
+  return [Subtype lb ty | lb <- lbs]
