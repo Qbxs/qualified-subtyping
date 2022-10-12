@@ -20,6 +20,7 @@ main =
             Left  err -> error err
             Right sol -> do
                 putStrLn $ ppShow sol
+                let test = M.mapWithKey (\k val -> reconstruct val) sol
+                putStrLn $ "Reconstruction: " ++ ppShow test
                 let test = M.mapWithKey (\k val -> reconstruct val == k) sol
-                putStrLn $ "Sanity test: " ++ ppShow test
-                putStrLn $ "All true? " ++ show (and $ M.elems test)
+                putStrLn $ "Reconstruction correct: " ++ show (and $ M.elems test)
