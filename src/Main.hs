@@ -9,12 +9,13 @@ main :: IO ()
 main =
     case
             generateWitnesses
-                [ Subtype Bot Top
-                , Subtype Nat (Inter Top Top)
-                , Subtype Nat (Inter (Inter Top Nat) Int')
-                , Subtype (Union Int' (Union Nat Bot)) Int'
-                , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
-                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
+                [ Subtype Nat (UniVar "u0")
+                , Subtype (UniVar "u0") (Inter Int' Top)
+                -- , Subtype Nat (Inter Top Top)
+                -- , Subtype Nat (Inter (Inter Top Nat) Int')
+                -- , Subtype (Union Int' (Union Nat Bot)) Int'
+                -- , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
+                -- , Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
                 ]
         of
             Left  err -> error err
