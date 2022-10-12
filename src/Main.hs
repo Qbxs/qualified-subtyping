@@ -1,7 +1,9 @@
 module Main where
 
-import Witnesses
-import qualified Data.Map as M
+import           Witnesses
+
+import qualified Data.Map                      as M
+import           Text.Show.Pretty               ( ppShow )
 
 main :: IO ()
 main =
@@ -17,7 +19,7 @@ main =
         of
             Left  err -> error err
             Right sol -> do
-                print sol
+                putStrLn $ ppShow sol
                 let test = M.mapWithKey (\k val -> reconstruct val == k) sol
-                putStrLn $ "Sanity test: " ++ show test
+                putStrLn $ "Sanity test: " ++ ppShow test
                 putStrLn $ "All true? " ++ show (and $ M.elems test)
