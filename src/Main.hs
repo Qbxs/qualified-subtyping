@@ -4,6 +4,7 @@ import           Witnesses
 
 import qualified Data.Map                      as M
 import           Text.Show.Pretty               ( ppShow )
+import           Control.Monad                  ( unless )
 
 main :: IO ()
 main =
@@ -21,7 +22,8 @@ main =
             Left  err -> error err
             Right sol -> do
                 putStrLn $ ppShow sol
-                let test = M.mapWithKey (\k val -> reconstruct val) sol
-                putStrLn $ "Reconstruction: " ++ ppShow test
-                let test = M.mapWithKey (\k val -> reconstruct val == k) sol
-                putStrLn $ "Reconstruction correct: " ++ show (and $ M.elems test)
+                let test = and $ M.elems $ M.mapWithKey (\k val -> reconstruct val == k) sol
+                putStrLn $ "Reconstruction correct: " ++ show test
+                unless test $ do
+                  let failures = M.filterWithKey (\k val -> reconstruct val == k) sol
+                  putStrLn $ "Reconstruction: " ++ ppShow failures
