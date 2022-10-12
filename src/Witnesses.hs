@@ -3,8 +3,11 @@
 {-# LANGUAGE StrictData #-}
 
 module Witnesses
-    ( main
-    , generateWitnesses
+    ( generateWitnesses
+    , reconstruct
+    , Constraint(..)
+    , Typ(..)
+    , (:<)
     ) where
 
 import           Control.Monad.Except
@@ -13,26 +16,8 @@ import           GHC.Base                       ( Alternative(..) )
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
 import           Data.Tuple                     ( swap, uncurry )
-import Data.Maybe (fromMaybe)
+import           Data.Maybe                     ( fromMaybe )
 
-main :: IO ()
-main =
-    case
-            generateWitnesses
-                [ Subtype Bot Top
-                , Subtype Nat (Inter Top Top)
-                , Subtype Nat (Inter (Inter Top Nat) Int')
-                , Subtype (Union Int' (Union Nat Bot)) Int'
-                , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
-                , Subtype (RecTy "a" (FuncTy Nat (RecVar "a"))) (FuncTy Nat (RecTy "a" (FuncTy Nat (RecVar "a"))))
-                ]
-        of
-            Left  err -> error err
-            Right sol -> do
-                print sol
-                let test = M.mapWithKey (\k val -> reconstruct val == k) sol
-                putStrLn $ "Sanity test: " ++ show test
-                putStrLn $ "All true? " ++ show (and $ M.elems test)
 
 -- | Reconstruct a constraint from a subtyping witness
 --   for showing that constraints are isomorphic to their witnesses.

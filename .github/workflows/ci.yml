@@ -2,11 +2,11 @@ on: [push]
 name: build
 jobs:
   runhaskell:
-    name: Type checking
+    name: Run App
     runs-on: ubuntu-latest # or macOS-latest, or windows-latest
     steps:
       - uses: actions/checkout@v3
       - uses: haskell/actions/setup@v2
         with:
-          ghc-version: '9.0.2'
-      - run: runhaskell Witnesses.hs
+          cabal-version: '3.6'
+      - run: cabal v2-run
