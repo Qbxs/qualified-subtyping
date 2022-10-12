@@ -135,8 +135,8 @@ substitute :: SolverM ()
 substitute = do
     ws <- gets ss_known
     coalesced <- mapM (go ws) ws
-    modify $ \(SolverState todos _ fresh)
-            -> SolverState todos coalesced fresh
+    modify $ \(SolverState cache _ fresh)
+            -> SolverState cache coalesced fresh
   where
     go :: Map Var (:<) -> (:<) -> SolverM (:<)
     go m (Refl ty) = pure (Refl ty)
