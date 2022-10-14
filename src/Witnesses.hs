@@ -1,13 +1,17 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 module Witnesses
     ( generateWitnesses
-    , reconstruct
+    -- , reconstruct
     , Constraint(..)
     , Typ(..)
     , (:<)
+    , RecVar(..)
+    , UniVar(..)
     ) where
 
 import           Control.Monad.Except
@@ -15,10 +19,13 @@ import           Control.Monad.State
 import           GHC.Base                       ( Alternative(..) )
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
+import           Data.Set                       ( Set )
+import qualified Data.Set                      as S
 import           Data.Tuple                     ( swap, uncurry )
 import           Data.Maybe                     ( fromMaybe )
+import           Text.Show.Pretty               ( ppShow )
 
-
+{-
 -- | Reconstruct a constraint from a subtyping witness
 --   for showing that constraints are isomorphic to their witnesses.
 reconstruct :: (:<) -> Constraint
@@ -42,26 +49,31 @@ reconstruct (Func w1 w2) =
         (Subtype s s') = reconstruct w2
     in  Subtype (FuncTy t s) (FuncTy t' s')
 reconstruct Prim = Subtype Nat Int'
-reconstruct (UnfoldL recVar w) =
+reconstruct (UnfoldL wVar recVar w) =
     let (Subtype t s) = reconstruct w
     in  Subtype (fromMaybe (error $ "no rectype found in " ++ show t) (getRecType recVar t)) s
-reconstruct (UnfoldR recVar w) =
+reconstruct (UnfoldR wVar recVar w) =
     let (Subtype t s) = reconstruct w
     in  Subtype t (fromMaybe (error $ "no rectype found in " ++ show s) (getRecType recVar s))
 reconstruct (Fix c) = c
 reconstruct SubVar{} = error "subvar should not occur"
+-}
 
-type SolverM a = StateT SolverState (Except String) a
+type SolverM = StateT SolverState (Except String)
 
 type Var = Char
+
+newtype RecVar = MkRecVar { unRecVar :: String }
+ deriving (Show, Eq, Ord)
+
+newtype UniVar = MkUniVar { unUniVar :: String }
+ deriving (Show, Eq, Ord)
 data SolverState = SolverState
-    { ss_cache :: Map Constraint Var
-     -- ^ already solved constraints, indirectly points to subtyping witnesses via ss_known
-    , ss_known :: Map Var (:<)
-     -- ^ mapping from witness-var to witness
+    { ss_cache :: Map Constraint (:<)
+     -- ^ already solved constraints
     , ss_fresh :: [Var]
       -- ^ "stream" of fresh variables
-    , ss_vars  :: Map String VarState
+    , ss_vars  :: Map UniVar VarState
       -- ^ mapping from UniVars to their bounds
     } deriving Show
 
@@ -71,13 +83,11 @@ data VarState = VarState
     } deriving Show
 
 runSolverM :: SolverM a -> Either String SolverState
-runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty M.empty ['a' ..] (M.singleton "u0" (VarState [] []))))
+runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty ['a' ..] (M.singleton (MkUniVar "u0") (VarState [] []))))
 
 -- | Generate subtyping witnesses for subtyping constraints.
 generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
-generateWitnesses cs = composeCache <$> runSolverM (solve cs >> substitute)
-  where
-    composeCache (SolverState cache known _ _) = M.compose known cache
+generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> evalStateT substitute S.empty)
 
 data Typ where
     Top    :: Typ
@@ -87,9 +97,9 @@ data Typ where
     FuncTy :: Typ -> Typ -> Typ
     Int'   :: Typ
     Nat    :: Typ
-    UniVar :: String -> Typ
-    RecVar :: String -> Typ
-    RecTy  :: String -> Typ -> Typ
+    UniVar :: UniVar -> Typ
+    RecVar :: RecVar -> Typ
+    RecTy  :: RecVar -> Typ -> Typ
  deriving (Show, Eq, Ord)
 
 data (:<) where
@@ -100,125 +110,126 @@ data (:<) where
     Join    :: (:<) -> (:<) -> (:<)
     Func    :: (:<) -> (:<) -> (:<)
     Prim    :: (:<)
-    -- VarW    :: (:<)
-    UnfoldL :: String -> (:<) -> (:<)
-    UnfoldR :: String -> (:<) -> (:<)
-    Fix     :: Constraint -> (:<)
+    UnfoldL :: Var -> RecVar -> (:<) -> (:<)
+    UnfoldR :: Var -> RecVar -> (:<) -> (:<)
+    LookupL :: RecVar -> (:<) -> (:<)
+    LookupR :: RecVar -> (:<) -> (:<)
     -- | only used during witness generation
-    SubVar  :: Var -> (:<)
+    SubVar  :: DelayedConstraint -> (:<)
+    Fix     :: Constraint -> (:<)
  deriving Show
 
 data Constraint where
     Subtype :: Typ -> Typ -> Constraint
  deriving (Show, Eq, Ord)
 
+data DelayedConstraint where
+    Delayed :: Typ -> Map RecVar Typ
+            -> Typ -> Map RecVar Typ
+            -> DelayedConstraint
+ deriving (Show, Eq, Ord)
+
+toDelayed :: Constraint -> DelayedConstraint
+toDelayed (Subtype t s) = Delayed t M.empty s M.empty
+
+fromDelayed :: DelayedConstraint -> Constraint
+fromDelayed (Delayed t _ s _) = Subtype t s
+
 -- | Solve constraints, and write corresponding witnesses in cache.
-solve :: [Constraint] -> SolverM ()
+solve :: [DelayedConstraint] -> SolverM ()
 solve [] = pure ()
 solve (c : css) = do
-    cacheHit <- inCache c
-    if cacheHit then solve css else do
-      var <- freshVar
-      addToCache c var
+    cacheHit <- inCache (fromDelayed c)
+    if cacheHit then solve css else
       case c of
-        (Subtype (UniVar uvl) tvu@(UniVar uvu)) ->
+        (fromDelayed -> Subtype (UniVar uvl) tvu@(UniVar uvu)) ->
           if uvl == uvu
           then solve css
           else do
             newCss <- addUpperBounds uvl tvu
-            solve (newCss ++ css)
-        (Subtype (UniVar uv) ub) -> do
+            solve ((toDelayed <$> newCss) ++ css)
+        (fromDelayed -> Subtype (UniVar uv) ub) -> do
           newCss <- addUpperBounds uv ub
-          solve (newCss ++ css)
-        (Subtype lb (UniVar uv)) -> do
+          solve ((toDelayed <$> newCss) ++ css)
+        (fromDelayed -> Subtype lb (UniVar uv)) -> do
           newCss <- addLowerBounds uv lb
-          solve (newCss ++ css)
-        _ -> do
-          (w, cs) <- solveSubWithWitness c
-          addToKnown var w
-          mapM_ (uncurry solveWithVar) cs
-          solve css
+          solve ((toDelayed <$> newCss) ++ css)
+        _otherwise -> do
+          (w, cs) <- solveSub c
+          addToCache (fromDelayed c) w
+          solve (cs ++ css)
 
--- | Same as /solve/ but don't generate a new witness var.
---   Used for subwitnesses that have already a witness var assigned.
-solveWithVar :: Var -> Constraint -> SolverM ()
-solveWithVar var c = do
-    cacheHit <- inCache c
-    unless cacheHit $ do
-      addToCache c var
-      (w, cs) <- solveSubWithWitness c
-      addToKnown var w
-      mapM_ (uncurry solveWithVar) cs
 
 -- | Substitute known witnesses for generated witness variables.
-substitute :: SolverM ()
+substitute :: StateT (Set Constraint) SolverM ()
 substitute = do
-    ws <- gets ss_known
-    coalesced <- mapM (go ws) ws
-    modify $ \(SolverState cache _ fresh vars)
-            -> SolverState cache coalesced fresh vars
+    cache <- lift $ gets ss_cache
+    x <- get
+    coalesced <- mapM (go cache) cache
+    lift $ modify $ \(SolverState _ fresh vars)
+                   -> SolverState coalesced fresh vars
   where
-    go :: Map Var (:<) -> (:<) -> SolverM (:<)
+    go :: MonadError String m => Map Constraint (:<) -> (:<) -> StateT (Set Constraint) m (:<)
     go m (Refl ty) = pure (Refl ty)
     go m (FromTop ty) = pure (FromTop ty)
     go m (ToBot ty) = pure (ToBot ty)
-    go m (Meet x0 x1) = Meet <$> go m x0 <*> go m x1
-    go m (Join x0 x1) = Join <$> go m x0 <*> go m x1
-    go m (Func x0 x1) = Func <$> go m x0 <*> go m x1
+    go m (Meet w1 w2) = Meet <$> go m w1 <*> go m w2
+    go m (Join w1 w2) = Join <$> go m w1 <*> go m w2
+    go m (Func w1 w2) = Func <$> go m w1 <*> go m w2
     go m Prim = pure Prim
-    go m (UnfoldL recVar ty) = UnfoldL recVar <$> go m ty
-    go m (UnfoldR recVar ty) = UnfoldR recVar <$> go m ty
-    go m (Fix ty) = pure (Fix ty)
-    go m (SubVar c) = case M.lookup c m of
-         Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> show m
+    go m (UnfoldL wVar recVar w) = UnfoldL wVar recVar <$> go m w
+    go m (UnfoldR wVar recVar w) = UnfoldR wVar recVar <$> go m w
+    go m (LookupL recVar w) = LookupL recVar <$> go m w
+    go m (LookupR recVar w) = LookupR recVar <$> go m w
+    go m (Fix c) = pure (Fix c)
+    go m (SubVar c) = case M.lookup (fromDelayed c) m of
+         Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> ppShow m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
-         Just w -> go m w
+         Just w -> go m w -- do
+            -- s <- get
+            -- if S.member (fromDelayed c) s
+            --     then pure $ Fix (fromDelayed c)
+            --     else modify (S.insert (fromDelayed c)) >> go m w
 
--- | subconstraints for reference.
-solveSub :: Constraint -> [Constraint]
-solveSub (Subtype _ Top) = []
-solveSub (Subtype Bot _) = []
-solveSub (Subtype t (Inter r s)) = [Subtype t r, Subtype t s]
-solveSub (Subtype (Union t s) r) = [Subtype t r, Subtype s r]
-solveSub (Subtype (FuncTy t s) (FuncTy t' s')) = [Subtype t' t, Subtype s s']
-solveSub (Subtype ty@RecTy{} ty') = [Subtype (unfoldRecType ty) ty']
-solveSub (Subtype ty' ty@RecTy{}) = [Subtype ty' (unfoldRecType ty)]
-solveSub (Subtype Nat Nat) = []
-solveSub (Subtype Int' Int') = []
-solveSub (Subtype Nat Int') = []
-solveSub _ = error "Cannot solve constraint."
 
 -- | Generate potentially incomplete witnesses
 -- using fresh witness variables in place for branches
 -- which will be substituted in later.
-solveSubWithWitness :: Constraint -> SolverM ((:<), [(Var, Constraint)])
-solveSubWithWitness (Subtype ty  Top        ) = pure (FromTop ty, [])
-solveSubWithWitness (Subtype Bot ty         ) = pure (ToBot ty, [])
-solveSubWithWitness (Subtype t   (Inter r s)) = do
-    (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t r) (Subtype t s)
-    pure (Meet (SubVar var1) (SubVar var2), catConstraints [c1, c2])
-solveSubWithWitness (Subtype (Union t s) r) = do
-    (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t r) (Subtype s r)
-    pure (Join (SubVar var1) (SubVar var2), catConstraints [c1, c2])
-solveSubWithWitness (Subtype ty@(RecTy recVar _) ty') = do
-    let subc = Subtype (unfoldRecType ty) ty'
-    cacheHit <- inCache subc
-    if cacheHit then pure (UnfoldL recVar (Fix subc), []) else do
-      c@(var, _) <- fromCacheOrFresh subc
-      pure (UnfoldL recVar (SubVar var), catConstraints [c])
-solveSubWithWitness (Subtype ty' ty@(RecTy recVar _)) = do
-    let subc = Subtype ty' (unfoldRecType ty)
-    cacheHit <- inCache subc
-    if cacheHit then pure (UnfoldR recVar (Fix subc), []) else do
-      c@(var, _) <- fromCacheOrFresh subc
-      pure (UnfoldR recVar (SubVar var), catConstraints [c])
-solveSubWithWitness (Subtype (FuncTy t s) (FuncTy t' s')) = do
-    (c1@(var1, _), c2@(var2, _)) <- fromCacheOrFresh2 (Subtype t' t) (Subtype s s')
-    pure (Func (SubVar var1) (SubVar var2), catConstraints [c1, c2])
-solveSubWithWitness (Subtype Nat  Nat ) = pure (Refl Nat, [])
-solveSubWithWitness (Subtype Int' Int') = pure (Refl Int', [])
-solveSubWithWitness (Subtype Nat  Int') = pure (Prim, [])
-solveSubWithWitness c                   = throwError $ "Cannot solve constraint:\n" <> show c
+solveSub :: DelayedConstraint -> SolverM ((:<), [DelayedConstraint])
+solveSub (Delayed rc@(RecTy recVar ty) m ty' m') = do
+    wVar <- freshVar
+    let c = Delayed ty (M.insert recVar rc m) ty' m'
+    pure (UnfoldL wVar recVar (SubVar c), [c])
+solveSub (Delayed ty m rc@(RecTy recVar ty') m') = do
+    wVar <- freshVar
+    let c = Delayed ty m ty' (M.insert recVar rc m')
+    pure (UnfoldR wVar recVar (SubVar c), [c])
+solveSub (Delayed (FuncTy t s) m (FuncTy t' s') m') = do
+    let c1 = Delayed t' m t m'
+    let c2 = Delayed s m s' m'
+    pure (Func (SubVar c1) (SubVar c2), [c1, c2])
+solveSub (Delayed t m (Inter r s) m') = do
+    let c1 = Delayed t m r m'
+    let c2 = Delayed t m s m'
+    pure (Meet (SubVar c1) (SubVar c2), [c1, c2])
+solveSub (Delayed (Union t s) m r m') = do
+    let c1 = Delayed t m r m'
+    let c2 = Delayed s m r m'
+    pure (Join (SubVar c1) (SubVar c2), [c1, c2])
+solveSub (Delayed (RecVar recVar) m ty' m') = do
+    case M.lookup recVar m of
+        Nothing -> throwError $ "ƒailed lookupL for " ++ show recVar ++ ppShow m
+        Just ty -> let c = Delayed ty m ty m' in pure (LookupL recVar (SubVar c), [c])
+solveSub (Delayed ty m (RecVar recVar) m') = do
+    case M.lookup recVar m' of
+        Nothing  -> throwError $ "failed lookupR for " ++ show recVar ++ ppShow m'
+        Just ty' -> let c = Delayed ty m ty' m' in pure (LookupR recVar (SubVar c), [c])
+solveSub (fromDelayed -> Subtype ty  Top) = pure (FromTop ty, [])
+solveSub (fromDelayed -> Subtype Bot ty) = pure (ToBot ty, [])
+solveSub (fromDelayed -> Subtype Nat  Nat) = pure (Refl Nat, [])
+solveSub (fromDelayed -> Subtype Int' Int') = pure (Refl Int', [])
+solveSub (fromDelayed -> Subtype Nat  Int') = pure (Prim, [])
+solveSub c = throwError $ "Cannot solve constraint:\n" <> show c
 
 -------------------------------------------------------------------------------
 -- Helper functions
@@ -229,101 +240,39 @@ freshVar :: SolverM Var
 freshVar = do
     stream <- gets ss_fresh
     let (var : rest) = stream
-    modify $ \(SolverState todos known _ vars)
-            -> SolverState todos known rest vars
+    modify $ \(SolverState todos _ vars)
+            -> SolverState todos rest vars
     pure var
-
--- | Get var for already solved constraint and /Nohting/
---   or generate new var and /Just/ constraint.
-fromCacheOrFresh :: Constraint -> SolverM (Var, Maybe Constraint)
-fromCacheOrFresh c = do
-    cache <- gets ss_cache
-    case M.lookup c cache of
-        Nothing -> do
-            newVar <- freshVar
-            pure (newVar, Just c)
-        Just var -> pure (var, Nothing)
-
--- | Check constraints for equality in order not to generate witness vars for equal constraints.
-fromCacheOrFresh2 :: Constraint -> Constraint -> SolverM ((Var, Maybe Constraint), (Var, Maybe Constraint))
-fromCacheOrFresh2 c1 c2 | c1 == c2 = (\c -> (c,c)) <$> fromCacheOrFresh c1
-                        | otherwise = do
-                            c1 <- fromCacheOrFresh c1
-                            c2 <- fromCacheOrFresh c2
-                            pure (c1, c2)
-
--- | Collapse constraints
-catConstraints :: [(Var, Maybe Constraint)] -> [(Var, Constraint)]
-catConstraints [] = []
-catConstraints ((var, Nothing):cs) = catConstraints cs
-catConstraints ((var, Just c):cs) = (var, c) : catConstraints cs
 
 -- | Check whether constraint is already solved.
 inCache :: Constraint -> SolverM Bool
 inCache c =  gets $ M.member c . ss_cache
 
 -- | Add solved constraint to cache and known witnesses.
-addToKnown :: Var -> (:<) -> SolverM ()
-addToKnown var w = modify $ \(SolverState cache known fresh vars) -> SolverState
-    cache
-    (M.insert var w known)
+addToCache :: Constraint -> (:<) -> SolverM ()
+addToCache c w = modify $ \(SolverState cache fresh vars) -> SolverState
+    (M.insert c w cache)
     fresh
     vars
 
--- | Add solved constraint to cache and known witnesses.
-addToCache :: Constraint -> Var -> SolverM ()
-addToCache c var = modify $ \(SolverState cache known fresh vars) -> SolverState
-    (M.insert c var cache)
-    known
-    fresh
-    vars
+modifyBounds :: (VarState -> VarState) -> UniVar -> SolverM ()
+modifyBounds f uv = modify (\(SolverState cache fresh vars) -> SolverState cache fresh (M.adjust f uv vars))
 
--- | Unfold a recursive type once.
-unfoldRecType :: Typ -> Typ
-unfoldRecType rc@(RecTy var ty) = substituteRecVar var rc ty
-unfoldRecType ty = ty
-
--- | Partial inverse of /unfoldRecType/.
-getRecType :: String -> Typ -> Maybe Typ
-getRecType varRec (FuncTy t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
-getRecType varRec (Union t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
-getRecType varRec (Inter t1 t2) = getRecType varRec t1 <|> getRecType varRec t2
-getRecType varRec rc@(RecTy varRec' ty) = if varRec == varRec'
-                                          then pure rc
-                                          else RecTy varRec' <$> getRecType varRec ty
-getRecType varRec ty = Nothing
-
-substituteRecVar :: String -> Typ -> Typ -> Typ
-substituteRecVar var ty (RecVar var') | var == var' = ty
-                                      | otherwise   = RecVar var'
-substituteRecVar var ty (Inter t1 t2) =
-    Inter (substituteRecVar var ty t1) (substituteRecVar var ty t2)
-substituteRecVar var ty (Union t1 t2) =
-    Union (substituteRecVar var ty t1) (substituteRecVar var ty t2)
-substituteRecVar var ty (FuncTy t1 t2) =
-    FuncTy (substituteRecVar var ty t1) (substituteRecVar var ty t2)
-substituteRecVar var ty (RecTy var' ty') =
-    RecTy var' (substituteRecVar var ty ty') -- WARNING: capture free substitution does not work
-substituteRecVar _ _ ty' = ty'
-
-modifyBounds :: (VarState -> VarState) -> String -> SolverM ()
-modifyBounds f uv = modify (\(SolverState cache known fresh vars) -> SolverState cache known fresh (M.adjust f uv vars))
-
-getBounds :: String -> SolverM VarState
+getBounds :: UniVar -> SolverM VarState
 getBounds uv = do
   bounds <- gets ss_vars
   case M.lookup uv bounds of
-    Nothing -> throwError $ "Tried to retrieve bounds for variable:" ++ uv
+    Nothing -> throwError $ "Tried to retrieve bounds for variable:" ++ unUniVar uv
     Just vs -> return vs
 
-addLowerBounds :: String -> Typ -> SolverM [Constraint]
+addLowerBounds :: UniVar -> Typ -> SolverM [Constraint]
 addLowerBounds uv ty = do
   modifyBounds (\(VarState ubs lbs) -> VarState ubs (ty:lbs)) uv
   bounds <- getBounds uv
   let ubs = vs_upperbounds bounds
   return [Subtype ty ub | ub <- ubs]
 
-addUpperBounds :: String -> Typ -> SolverM [Constraint]
+addUpperBounds :: UniVar -> Typ -> SolverM [Constraint]
 addUpperBounds uv ty = do
   modifyBounds (\(VarState ubs lbs) -> VarState (ty:ubs) lbs) uv
   bounds <- getBounds uv
