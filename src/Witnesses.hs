@@ -92,7 +92,7 @@ runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty ['a' ..] (M.s
 
 -- | Generate subtyping witnesses for subtyping constraints.
 generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
-generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> evalStateT substitute S.empty)
+generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> substitute)
 
 data Typ where
     Top    :: Typ
@@ -166,15 +166,15 @@ solve (c : css) = do
 
 
 -- | Substitute known witnesses for generated witness variables.
-substitute :: StateT (Set Constraint) SolverM ()
+substitute :: SolverM ()
 substitute = do
-    cache <- lift $ gets ss_cache
-    x <- get
-    coalesced <- mapM (go cache) cache
-    lift $ modify $ \(SolverState _ fresh vars)
-                   -> SolverState coalesced fresh vars
+    cache <- gets ss_cache
+    forM_ (M.toList cache) $ \(c,w) -> do
+      w <- go cache w
+      modify $ \(SolverState cache' fresh vars)
+              -> SolverState (M.adjust (const w) c cache') fresh vars
   where
-    go :: MonadError String m => Map Constraint (:<) -> (:<) -> StateT (Set Constraint) m (:<)
+    go :: Map Constraint (:<) -> (:<) -> SolverM (:<)
     go m (Refl ty) = pure (Refl ty)
     go m (FromTop ty) = pure (FromTop ty)
     go m (ToBot ty) = pure (ToBot ty)
@@ -188,19 +188,36 @@ substitute = do
     go m (LookupR recVar w) = LookupR recVar <$> go m w
     go m (Fix c) = pure (Fix c)
     go m (SubVar c) = case M.lookup (fromDelayed c) m of
-         Nothing -> throwError $ "Cannot find witness variable: " <> show c <> " in env: " <> ppShow m
+         Nothing -> throwError $ "Cannot find constraint: " <> show c <> " in env: " <> ppShow m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
-         Just w -> go m w -- do
-            -- s <- get
-            -- if S.member (fromDelayed c) s
-            --     then pure $ Fix (fromDelayed c)
-            --     else modify (S.insert (fromDelayed c)) >> go m w
+         Just w -> go m w
 
 
 -- | Generate potentially incomplete witnesses
 -- using fresh witness variables in place for branches
 -- which will be substituted in later.
 solveSub :: DelayedConstraint -> SolverM ((:<), [DelayedConstraint])
+-- here we have to check whether the subconstraint is in cache
+-- if it is, we have to put in /Fix/ with the constraint
+-- otherwise we have cyclic references in /substitute/
+solveSub (Delayed (RecVar recVar) m ty' m') = do
+    case M.lookup recVar m of
+        Nothing -> throwError $ "ƒailed lookupL for " ++ show recVar ++ ppShow m
+        Just ty -> do
+            let c = Delayed ty m ty' m'
+            cacheHit <- inCache (fromDelayed c)
+            if cacheHit
+                then pure (LookupR recVar (Fix (fromDelayed c)), [])
+                else pure (LookupL recVar (SubVar c), [c])
+solveSub (Delayed ty m (RecVar recVar) m') = do
+    case M.lookup recVar m' of
+        Nothing  -> throwError $ "ƒailed lookupR for " ++ show recVar ++ ppShow m'
+        Just ty' -> do
+            let c = Delayed ty m ty' m'
+            cacheHit <- inCache (fromDelayed c)
+            if cacheHit
+                then pure (LookupR recVar (Fix (fromDelayed c)), [])
+                else pure (LookupR recVar (SubVar c), [c])
 solveSub (Delayed rc@(RecTy recVar ty) m ty' m') = do
     wVar <- freshVar
     let c = Delayed ty (M.insert recVar rc m) ty' m'
@@ -221,14 +238,6 @@ solveSub (Delayed (Union t s) m r m') = do
     let c1 = Delayed t m r m'
     let c2 = Delayed s m r m'
     pure (Join (SubVar c1) (SubVar c2), [c1, c2])
-solveSub (Delayed (RecVar recVar) m ty' m') = do
-    case M.lookup recVar m of
-        Nothing -> throwError $ "ƒailed lookupL for " ++ show recVar ++ ppShow m
-        Just ty -> let c = Delayed ty m ty m' in pure (LookupL recVar (SubVar c), [c])
-solveSub (Delayed ty m (RecVar recVar) m') = do
-    case M.lookup recVar m' of
-        Nothing  -> throwError $ "failed lookupR for " ++ show recVar ++ ppShow m'
-        Just ty' -> let c = Delayed ty m ty' m' in pure (LookupR recVar (SubVar c), [c])
 solveSub (fromDelayed -> Subtype ty  Top) = pure (FromTop ty, [])
 solveSub (fromDelayed -> Subtype Bot ty) = pure (ToBot ty, [])
 solveSub (fromDelayed -> Subtype Nat  Nat) = pure (Refl Nat, [])
