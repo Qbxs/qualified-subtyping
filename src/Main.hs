@@ -29,8 +29,8 @@ main =
             Left  err -> error err
             Right sol -> do
                 putStrLn $ ppShow sol
-                -- let test = and $ M.elems $ M.mapWithKey (\k val -> reconstruct val == k) sol
-                -- putStrLn $ "Reconstruction correct: " ++ show test
-                -- unless test $ do
-                --   let failures = M.filterWithKey (\k val -> reconstruct val == k) sol
-                --   putStrLn $ "Reconstruction: " ++ ppShow failures
+                let test = and $ M.elems $ M.mapWithKey (\k val -> reconstruct val == k) sol
+                putStrLn $ "Reconstruction correct: " ++ show test
+                unless test $ do
+                  let failures = M.filterWithKey (\k val -> reconstruct val == k) sol
+                  putStrLn $ "Reconstruction: " ++ ppShow failures

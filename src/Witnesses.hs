@@ -6,7 +6,7 @@
 
 module Witnesses
     ( generateWitnesses
-    -- , reconstruct
+    , reconstruct
     , Constraint(..)
     , Typ(..)
     , (:<)
@@ -25,7 +25,7 @@ import           Data.Tuple                     ( swap, uncurry )
 import           Data.Maybe                     ( fromMaybe )
 import           Text.Show.Pretty               ( ppShow )
 
-{-
+
 -- | Reconstruct a constraint from a subtyping witness
 --   for showing that constraints are isomorphic to their witnesses.
 reconstruct :: (:<) -> Constraint
@@ -51,13 +51,18 @@ reconstruct (Func w1 w2) =
 reconstruct Prim = Subtype Nat Int'
 reconstruct (UnfoldL wVar recVar w) =
     let (Subtype t s) = reconstruct w
-    in  Subtype (fromMaybe (error $ "no rectype found in " ++ show t) (getRecType recVar t)) s
+    in  Subtype (RecTy recVar t) s
 reconstruct (UnfoldR wVar recVar w) =
     let (Subtype t s) = reconstruct w
-    in  Subtype t (fromMaybe (error $ "no rectype found in " ++ show s) (getRecType recVar s))
+    in  Subtype t (RecTy recVar s)
+reconstruct (LookupL recVar w) =
+    let (Subtype _t s) = reconstruct w
+    in Subtype (RecVar recVar) s
+reconstruct (LookupR recVar w) =
+    let (Subtype t _s) = reconstruct w
+    in Subtype t (RecVar recVar)
 reconstruct (Fix c) = c
 reconstruct SubVar{} = error "subvar should not occur"
--}
 
 type SolverM = StateT SolverState (Except String)
 
