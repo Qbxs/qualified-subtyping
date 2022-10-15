@@ -49,10 +49,10 @@ reconstruct (Func w1 w2) =
         (Subtype s s') = reconstruct w2
     in  Subtype (FuncTy t s) (FuncTy t' s')
 reconstruct Prim = Subtype Nat Int'
-reconstruct (UnfoldL wVar recVar w) =
+reconstruct (UnfoldL recVar w) =
     let (Subtype t s) = reconstruct w
     in  Subtype (RecTy recVar t) s
-reconstruct (UnfoldR wVar recVar w) =
+reconstruct (UnfoldR recVar w) =
     let (Subtype t s) = reconstruct w
     in  Subtype t (RecTy recVar s)
 reconstruct (LookupL recVar w) =
@@ -66,8 +66,6 @@ reconstruct SubVar{} = error "subvar should not occur"
 
 type SolverM = StateT SolverState (Except String)
 
-type Var = Char
-
 newtype RecVar = MkRecVar { unRecVar :: String }
  deriving (Show, Eq, Ord)
 
@@ -76,8 +74,6 @@ newtype UniVar = MkUniVar { unUniVar :: String }
 data SolverState = SolverState
     { ss_cache :: Map Constraint (:<)
      -- ^ already solved constraints
-    , ss_fresh :: [Var]
-      -- ^ "stream" of fresh variables
     , ss_vars  :: Map UniVar VarState
       -- ^ mapping from UniVars to their bounds
     } deriving Show
@@ -88,7 +84,7 @@ data VarState = VarState
     } deriving Show
 
 runSolverM :: SolverM a -> Either String SolverState
-runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty ['a' ..] (M.singleton (MkUniVar "u0") (VarState [] []))))
+runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty (M.singleton (MkUniVar "u0") (VarState [] []))))
 
 -- | Generate subtyping witnesses for subtyping constraints.
 generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
@@ -115,8 +111,8 @@ data (:<) where
     Join    :: (:<) -> (:<) -> (:<)
     Func    :: (:<) -> (:<) -> (:<)
     Prim    :: (:<)
-    UnfoldL :: Var -> RecVar -> (:<) -> (:<)
-    UnfoldR :: Var -> RecVar -> (:<) -> (:<)
+    UnfoldL :: RecVar -> (:<) -> (:<)
+    UnfoldR :: RecVar -> (:<) -> (:<)
     LookupL :: RecVar -> (:<) -> (:<)
     LookupR :: RecVar -> (:<) -> (:<)
     -- | only used during witness generation
@@ -171,8 +167,8 @@ substitute = do
     cache <- gets ss_cache
     forM_ (M.toList cache) $ \(c,w) -> do
       w <- go cache w
-      modify $ \(SolverState cache' fresh vars)
-              -> SolverState (M.adjust (const w) c cache') fresh vars
+      modify $ \(SolverState cache' vars)
+              -> SolverState (M.adjust (const w) c cache') vars
   where
     go :: Map Constraint (:<) -> (:<) -> SolverM (:<)
     go m (Refl ty) = pure (Refl ty)
@@ -182,8 +178,8 @@ substitute = do
     go m (Join w1 w2) = Join <$> go m w1 <*> go m w2
     go m (Func w1 w2) = Func <$> go m w1 <*> go m w2
     go m Prim = pure Prim
-    go m (UnfoldL wVar recVar w) = UnfoldL wVar recVar <$> go m w
-    go m (UnfoldR wVar recVar w) = UnfoldR wVar recVar <$> go m w
+    go m (UnfoldL recVar w) = UnfoldL recVar <$> go m w
+    go m (UnfoldR recVar w) = UnfoldR recVar <$> go m w
     go m (LookupL recVar w) = LookupL recVar <$> go m w
     go m (LookupR recVar w) = LookupR recVar <$> go m w
     go m (Fix c) = pure (Fix c)
@@ -219,13 +215,11 @@ solveSub (Delayed ty m (RecVar recVar) m') = do
                 then pure (LookupR recVar (Fix (fromDelayed c)), [])
                 else pure (LookupR recVar (SubVar c), [c])
 solveSub (Delayed rc@(RecTy recVar ty) m ty' m') = do
-    wVar <- freshVar
     let c = Delayed ty (M.insert recVar rc m) ty' m'
-    pure (UnfoldL wVar recVar (SubVar c), [c])
+    pure (UnfoldL recVar (SubVar c), [c])
 solveSub (Delayed ty m rc@(RecTy recVar ty') m') = do
-    wVar <- freshVar
     let c = Delayed ty m ty' (M.insert recVar rc m')
-    pure (UnfoldR wVar recVar (SubVar c), [c])
+    pure (UnfoldR recVar (SubVar c), [c])
 solveSub (Delayed (FuncTy t s) m (FuncTy t' s') m') = do
     let c1 = Delayed t' m t m'
     let c2 = Delayed s m s' m'
@@ -249,28 +243,16 @@ solveSub c = throwError $ "Cannot solve constraint:\n" <> show c
 -- Helper functions
 -------------------------------------------------------------------------------
 
--- | Get fresh witness variable.
-freshVar :: SolverM Var
-freshVar = do
-    stream <- gets ss_fresh
-    let (var : rest) = stream
-    modify $ \(SolverState todos _ vars)
-            -> SolverState todos rest vars
-    pure var
-
 -- | Check whether constraint is already solved.
 inCache :: Constraint -> SolverM Bool
 inCache c =  gets $ M.member c . ss_cache
 
 -- | Add solved constraint to cache and known witnesses.
 addToCache :: Constraint -> (:<) -> SolverM ()
-addToCache c w = modify $ \(SolverState cache fresh vars) -> SolverState
-    (M.insert c w cache)
-    fresh
-    vars
+addToCache c w = modify $ \(SolverState cache vars) -> SolverState (M.insert c w cache) vars
 
 modifyBounds :: (VarState -> VarState) -> UniVar -> SolverM ()
-modifyBounds f uv = modify (\(SolverState cache fresh vars) -> SolverState cache fresh (M.adjust f uv vars))
+modifyBounds f uv = modify (\(SolverState cache vars) -> SolverState cache (M.adjust f uv vars))
 
 getBounds :: UniVar -> SolverM VarState
 getBounds uv = do
