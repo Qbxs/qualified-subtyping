@@ -15,17 +15,23 @@ main =
                 , Subtype Nat                           (Inter Top Top)
                 , Subtype Nat (Inter (Inter Top Nat) Int')
                 , Subtype (Union Int' (Union Nat Bot))  Int'
+                , Subtype (FuncTy Top Bot)              (FuncTy Bot Top)
                 , Subtype (FuncTy (Inter Top Int') Nat) (FuncTy Nat Int')
                 , Subtype
                     (RecTy (MkRecVar "a") (FuncTy Nat (RecVar (MkRecVar "a"))))
-                    (RecTy (MkRecVar "b") (FuncTy Nat (FuncTy Nat (RecVar (MkRecVar "b")))))
+                    (RecTy (MkRecVar "b")
+                           (FuncTy Nat (FuncTy Nat (RecVar (MkRecVar "b"))))
+                    )
+                , Subtype Nat (RecTy (MkRecVar "a") Nat)
                 ]
         of
             Left  err -> error err
             Right sol -> do
                 putStrLn $ ppShow sol
-                let test = and $ M.elems $ M.mapWithKey (\k val -> reconstruct val == k) sol
+                let test = and $ M.elems $ M.mapWithKey
+                            (\k val -> reconstruct val == k)
+                            sol
                 putStrLn $ "Reconstruction correct: " ++ show test
                 unless test $ do
-                  let failures = M.filterWithKey (\k val -> reconstruct val /= k) sol
-                  putStrLn $ "Reconstruction: " ++ ppShow failures
+                    let failures = M.filterWithKey (\k val -> reconstruct val /= k) sol
+                    putStrLn $ "Reconstruction: " ++ ppShow failures
