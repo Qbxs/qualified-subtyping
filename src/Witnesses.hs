@@ -143,18 +143,18 @@ solve (c : css) = do
     cacheHit <- inCache (fromDelayed c)
     if cacheHit then solve css else
       case c of
-        (fromDelayed -> Subtype (UniVar uvl) tvu@(UniVar uvu)) ->
+        (Delayed (UniVar uvl) m tvu@(UniVar uvu) m') ->
           if uvl == uvu
           then solve css
           else do
-            newCss <- addUpperBounds uvl tvu
-            solve ((toDelayed <$> newCss) ++ css)
-        (fromDelayed -> Subtype (UniVar uv) ub) -> do
-          newCss <- addUpperBounds uv ub
-          solve ((toDelayed <$> newCss) ++ css)
-        (fromDelayed -> Subtype lb (UniVar uv)) -> do
-          newCss <- addLowerBounds uv lb
-          solve ((toDelayed <$> newCss) ++ css)
+            newCss <- addUpperBounds uvl tvu m m'
+            solve (newCss ++ css)
+        (Delayed (UniVar uv) m ub m') -> do
+          newCss <- addUpperBounds uv ub m m'
+          solve (newCss ++ css)
+        (Delayed lb m (UniVar uv) m') -> do
+          newCss <- addLowerBounds uv lb m m'
+          solve (newCss ++ css)
         _otherwise -> do
           (w, cs) <- solveSub c
           addToCache (fromDelayed c) w
@@ -261,16 +261,16 @@ getBounds uv = do
     Nothing -> throwError $ "Tried to retrieve bounds for variable:" ++ unUniVar uv
     Just vs -> return vs
 
-addLowerBounds :: UniVar -> Typ -> SolverM [Constraint]
-addLowerBounds uv ty = do
+addLowerBounds :: UniVar -> Typ -> Map RecVar Typ -> Map RecVar Typ -> SolverM [DelayedConstraint]
+addLowerBounds uv ty m m' = do
   modifyBounds (\(VarState ubs lbs) -> VarState ubs (ty:lbs)) uv
   bounds <- getBounds uv
   let ubs = vs_upperbounds bounds
-  return [Subtype ty ub | ub <- ubs]
+  return [Delayed ty m ub m' | ub <- ubs]
 
-addUpperBounds :: UniVar -> Typ -> SolverM [Constraint]
-addUpperBounds uv ty = do
+addUpperBounds :: UniVar -> Typ -> Map RecVar Typ -> Map RecVar Typ -> SolverM [DelayedConstraint]
+addUpperBounds uv ty m m' = do
   modifyBounds (\(VarState ubs lbs) -> VarState (ty:ubs) lbs) uv
   bounds <- getBounds uv
   let lbs = vs_lowerbounds bounds
-  return [Subtype lb ty | lb <- lbs]
+  return [Delayed lb m ty m' | lb <- lbs]
