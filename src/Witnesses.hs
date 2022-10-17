@@ -18,13 +18,10 @@ import           Control.Monad.Except
 import           Control.Monad.State
 
 import           Control.Monad.Reader
-import           GHC.Base                       ( Alternative(..) )
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
 import           Data.Set                       ( Set )
 import qualified Data.Set                      as S
-import           Data.Tuple                     ( swap, uncurry )
-import           Data.Maybe                     ( fromMaybe )
 import           Text.Show.Pretty               ( ppShow )
 
 
