@@ -16,6 +16,8 @@ module Witnesses
 
 import           Control.Monad.Except
 import           Control.Monad.State
+
+import           Control.Monad.Reader
 import           GHC.Base                       ( Alternative(..) )
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
@@ -88,7 +90,7 @@ runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty (M.singleton 
 
 -- | Generate subtyping witnesses for subtyping constraints.
 generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
-generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> substitute)
+generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> runReaderT substitute S.empty)
 
 data Typ where
     Top    :: Typ
@@ -162,7 +164,7 @@ solve (c : css) = do
 
 
 -- | Substitute known witnesses for generated witness variables.
-substitute :: SolverM ()
+substitute :: ReaderT (Set DelayedConstraint) SolverM ()
 substitute = do
     cache <- gets ss_cache
     forM_ (M.toList cache) $ \(c,w) -> do
@@ -170,7 +172,7 @@ substitute = do
       modify $ \(SolverState cache' vars)
               -> SolverState (M.adjust (const w) c cache') vars
   where
-    go :: Map Constraint (:<) -> (:<) -> SolverM (:<)
+    go :: Map Constraint (:<) -> (:<) -> ReaderT (Set DelayedConstraint) SolverM (:<)
     go m (Refl ty) = pure (Refl ty)
     go m (FromTop ty) = pure (FromTop ty)
     go m (ToBot ty) = pure (ToBot ty)
@@ -178,7 +180,7 @@ substitute = do
     go m (Join w1 w2) = Join <$> go m w1 <*> go m w2
     go m (Func w1 w2) = Func <$> go m w1 <*> go m w2
     go m Prim = pure Prim
-    go m (UnfoldL recVar w) = UnfoldL recVar <$> go m w
+    go m (UnfoldL recVar w) = UnfoldL recVar <$> local id go m w
     go m (UnfoldR recVar w) = UnfoldR recVar <$> go m w
     go m (LookupL recVar w) = LookupL recVar <$> go m w
     go m (LookupR recVar w) = LookupR recVar <$> go m w
@@ -186,7 +188,11 @@ substitute = do
     go m (SubVar c) = case M.lookup (fromDelayed c) m of
          Nothing -> throwError $ "Cannot find constraint: " <> show c <> " in env: " <> ppShow m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
-         Just w -> go m w
+         Just w -> do
+            env <- ask
+            if S.member c env
+                then pure $ Fix (fromDelayed c)
+                else local (S.insert c) (go m w)
 
 
 -- | Generate potentially incomplete witnesses
@@ -201,19 +207,13 @@ solveSub (Delayed (RecVar recVar) m ty' m') = do
         Nothing -> throwError $ "ƒailed lookupL for " ++ show recVar ++ ppShow m
         Just ty -> do
             let c = Delayed ty m ty' m'
-            cacheHit <- inCache (fromDelayed c)
-            if cacheHit
-                then pure (LookupR recVar (Fix (fromDelayed c)), [])
-                else pure (LookupL recVar (SubVar c), [c])
+            pure (LookupL recVar (SubVar c), [c])
 solveSub (Delayed ty m (RecVar recVar) m') = do
     case M.lookup recVar m' of
         Nothing  -> throwError $ "ƒailed lookupR for " ++ show recVar ++ ppShow m'
         Just ty' -> do
             let c = Delayed ty m ty' m'
-            cacheHit <- inCache (fromDelayed c)
-            if cacheHit
-                then pure (LookupR recVar (Fix (fromDelayed c)), [])
-                else pure (LookupR recVar (SubVar c), [c])
+            pure (LookupR recVar (SubVar c), [c])
 solveSub (Delayed rc@(RecTy recVar ty) m ty' m') = do
     let c = Delayed ty (M.insert recVar rc m) ty' m'
     pure (UnfoldL recVar (SubVar c), [c])
