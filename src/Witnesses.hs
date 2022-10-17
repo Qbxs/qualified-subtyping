@@ -3,6 +3,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Witnesses
     ( generateWitnesses
@@ -185,11 +186,9 @@ substitute = do
     go m (SubVar c) = case M.lookup (fromDelayed c) m of
          Nothing -> throwError $ "Cannot find constraint: " <> show c <> " in env: " <> ppShow m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
-         Just w -> do
-            env <- ask
-            if S.member c env
-                then pure $ Fix (fromDelayed c)
-                else local (S.insert c) (go m w)
+         Just w -> asks (S.member c) >>= \case
+            True -> pure $ Fix (fromDelayed c)
+            False -> local (S.insert c) (go m w)
 
 
 -- | Generate potentially incomplete witnesses
