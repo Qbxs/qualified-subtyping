@@ -61,6 +61,9 @@ reconstruct (LookupL recVar w) =
 reconstruct (LookupR recVar w) =
     let (Subtype t _s) = reconstruct w
     in Subtype t (RecVar recVar)
+reconstruct (UniVarB uv1 uv2) = Subtype (UniVar uv1) (UniVar uv2)
+reconstruct (UniVarL uv ub) = Subtype (UniVar uv) ub
+reconstruct (UniVarR uv lb) = Subtype lb (UniVar uv)
 reconstruct (Fix c) = c
 reconstruct SubVar{} = error "subvar should not occur"
 
@@ -115,6 +118,9 @@ data (:<) where
     UnfoldR :: RecVar -> (:<) -> (:<)
     LookupL :: RecVar -> (:<) -> (:<)
     LookupR :: RecVar -> (:<) -> (:<)
+    UniVarL :: UniVar -> Typ -> (:<)
+    UniVarR :: UniVar -> Typ -> (:<)
+    UniVarB :: UniVar -> UniVar -> (:<)
     -- | only used during witness generation
     SubVar  :: DelayedConstraint -> (:<)
     Fix     :: Constraint -> (:<)
@@ -145,15 +151,18 @@ solve (c : css) = do
       case c of
         (Delayed (UniVar uvl) m tvu@(UniVar uvu) m') ->
           if uvl == uvu
-          then solve css
+          then addToCache (fromDelayed c) (UniVarB uvl uvl) >> solve css
           else do
             newCss <- addUpperBounds uvl tvu m m'
+            addToCache (fromDelayed c) (UniVarB uvl uvu)
             solve (newCss ++ css)
         (Delayed (UniVar uv) m ub m') -> do
           newCss <- addUpperBounds uv ub m m'
+          addToCache (fromDelayed c) (UniVarL uv ub)
           solve (newCss ++ css)
         (Delayed lb m (UniVar uv) m') -> do
           newCss <- addLowerBounds uv lb m m'
+          addToCache (fromDelayed c) (UniVarR uv lb)
           solve (newCss ++ css)
         _otherwise -> do
           (w, cs) <- solveSub c
@@ -171,18 +180,21 @@ substitute = do
               -> SolverState (M.adjust (const w) c cache') vars
   where
     go :: Map Constraint (:<) -> (:<) -> ReaderT (Set DelayedConstraint) SolverM (:<)
-    go m (Refl ty) = pure (Refl ty)
-    go m (FromTop ty) = pure (FromTop ty)
-    go m (ToBot ty) = pure (ToBot ty)
+    go _ (Refl ty) = pure (Refl ty)
+    go _ (FromTop ty) = pure (FromTop ty)
+    go _ (ToBot ty) = pure (ToBot ty)
     go m (Meet w1 w2) = Meet <$> go m w1 <*> go m w2
     go m (Join w1 w2) = Join <$> go m w1 <*> go m w2
     go m (Func w1 w2) = Func <$> go m w1 <*> go m w2
-    go m Prim = pure Prim
+    go _ Prim = pure Prim
     go m (UnfoldL recVar w) = UnfoldL recVar <$> local id go m w
     go m (UnfoldR recVar w) = UnfoldR recVar <$> go m w
     go m (LookupL recVar w) = LookupL recVar <$> go m w
     go m (LookupR recVar w) = LookupR recVar <$> go m w
-    go m (Fix c) = pure (Fix c)
+    go _ (Fix c) = pure (Fix c)
+    go _ (UniVarB uv1 uv2) = pure (UniVarB uv1 uv2)
+    go _ (UniVarL uv ub) = pure (UniVarL uv ub)
+    go _ (UniVarR uv lb) = pure (UniVarR uv lb)
     go m (SubVar c) = case M.lookup (fromDelayed c) m of
          Nothing -> throwError $ "Cannot find constraint: " <> show c <> " in env: " <> ppShow m
          Just (SubVar c') -> throwError "Tried to subtitute a variable with another variable"
