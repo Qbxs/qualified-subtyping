@@ -10,7 +10,7 @@ main :: IO ()
 main =
     case
             generateWitnesses
-                [ Subtype Nat                           (UniVar (MkUniVar "u0"))
+                [ Subtype Nat                           (Inter Nat (UniVar (MkUniVar "u0")))
                 , Subtype (UniVar (MkUniVar "u0"))      (Inter Int' Top)
                 , Subtype Nat                           (Inter Top Top)
                 , Subtype Nat (Inter (Inter Top Nat) Int')
