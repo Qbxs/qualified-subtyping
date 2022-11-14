@@ -1,5 +1,3 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -15,9 +13,10 @@ module Witnesses
     , UniVar(..)
     ) where
 
+import           Types
+
 import           Control.Monad.Except
 import           Control.Monad.State
-
 import           Control.Monad.Reader
 import           Data.Map                       ( Map )
 import qualified Data.Map                      as M
@@ -28,7 +27,9 @@ import           Text.Show.Pretty               ( ppShow )
 
 -- | Reconstruct a constraint from a subtyping witness
 --   for showing that constraints are isomorphic to their witnesses.
--- Inverse of /solve/.
+-- Inverse of 'solve':
+-- 
+-- > fmap reconstruct . solve == id
 reconstruct :: Witness -> Constraint
 reconstruct (Refl    ty) = Subtype ty ty
 reconstruct (FromTop ty) = Subtype ty Top
@@ -70,12 +71,6 @@ reconstruct SubVar{} = error "subvar should not occur"
 
 type SolverM = StateT SolverState (Except String)
 
-newtype RecVar = MkRecVar { unRecVar :: String }
- deriving (Show, Eq, Ord)
-
-newtype UniVar = MkUniVar { unUniVar :: String }
- deriving (Show, Eq, Ord)
-
 data SolverState = SolverState
     { ss_cache :: Map Constraint Witness
      -- ^ already solved constraints
@@ -95,19 +90,8 @@ runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty (M.singleton 
 generateWitnesses :: [Constraint] -> Either String (Map Constraint Witness)
 generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> runReaderT substitute S.empty)
 
-data Typ where
-    Top    :: Typ
-    Bot    :: Typ
-    Inter  :: Typ -> Typ -> Typ
-    Union  :: Typ -> Typ -> Typ
-    FuncTy :: Typ -> Typ -> Typ
-    Int'   :: Typ
-    Nat    :: Typ
-    UniVar :: UniVar -> Typ
-    RecVar :: RecVar -> Typ
-    RecTy  :: RecVar -> Typ -> Typ
- deriving (Show, Eq, Ord)
-
+-- | A Subtyping witness.
+-- Encodes the way a subtyping constraint is being solved.
 data Witness where
     Refl    :: Typ -> Witness
     FromTop :: Typ -> Witness

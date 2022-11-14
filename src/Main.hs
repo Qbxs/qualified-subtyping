@@ -1,5 +1,6 @@
 module Main where
 
+import           Predicates
 import           Witnesses
 
 import qualified Data.Map                      as M
@@ -7,7 +8,10 @@ import           Text.Show.Pretty               ( ppShow )
 import           Control.Monad                  ( unless )
 
 main :: IO ()
-main =
+main = witnessTest >> predicateTest
+
+witnessTest :: IO ()
+witnessTest =
     case
             generateWitnesses
                 [ Subtype Nat                           (Inter Nat (UniVar (MkUniVar "u0")))
@@ -35,3 +39,9 @@ main =
                 unless test $ do
                     let failures = M.filterWithKey (\k val -> reconstruct val /= k) sol
                     putStrLn $ "Reconstruction: " ++ ppShow failures
+
+predicateTest :: IO ()
+predicateTest = do
+    let instances = [ Predicate Co "Show" Int', Predicate Contra "Read" Nat ]
+    print (resolveInstance (Predicate Co "Show" (Inter Nat Int')) instances)
+    print (resolveInstance (Predicate Contra "Read" (Union Nat Int')) instances)
