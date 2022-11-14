@@ -10,7 +10,7 @@ module Witnesses
     , reconstruct
     , Constraint(..)
     , Typ(..)
-    , (:<)
+    , Witness
     , RecVar(..)
     , UniVar(..)
     ) where
@@ -28,7 +28,8 @@ import           Text.Show.Pretty               ( ppShow )
 
 -- | Reconstruct a constraint from a subtyping witness
 --   for showing that constraints are isomorphic to their witnesses.
-reconstruct :: (:<) -> Constraint
+-- Inverse of /solve/.
+reconstruct :: Witness -> Constraint
 reconstruct (Refl    ty) = Subtype ty ty
 reconstruct (FromTop ty) = Subtype ty Top
 reconstruct (ToBot   ty) = Subtype Bot ty
@@ -74,8 +75,9 @@ newtype RecVar = MkRecVar { unRecVar :: String }
 
 newtype UniVar = MkUniVar { unUniVar :: String }
  deriving (Show, Eq, Ord)
+
 data SolverState = SolverState
-    { ss_cache :: Map Constraint (:<)
+    { ss_cache :: Map Constraint Witness
      -- ^ already solved constraints
     , ss_vars  :: Map UniVar VarState
       -- ^ mapping from UniVars to their bounds
@@ -90,7 +92,7 @@ runSolverM :: SolverM a -> Either String SolverState
 runSolverM s = snd <$> runExcept (runStateT s (SolverState M.empty (M.singleton (MkUniVar "u0") (VarState [] []))))
 
 -- | Generate subtyping witnesses for subtyping constraints.
-generateWitnesses :: [Constraint] -> Either String (Map Constraint (:<))
+generateWitnesses :: [Constraint] -> Either String (Map Constraint Witness)
 generateWitnesses cs = ss_cache <$> runSolverM (solve (toDelayed <$> cs) >> runReaderT substitute S.empty)
 
 data Typ where
@@ -106,24 +108,24 @@ data Typ where
     RecTy  :: RecVar -> Typ -> Typ
  deriving (Show, Eq, Ord)
 
-data (:<) where
-    Refl    :: Typ -> (:<)
-    FromTop :: Typ -> (:<)
-    ToBot   :: Typ -> (:<)
-    Meet    :: (:<) -> (:<) -> (:<)
-    Join    :: (:<) -> (:<) -> (:<)
-    Func    :: (:<) -> (:<) -> (:<)
-    Prim    :: (:<)
-    UnfoldL :: RecVar -> (:<) -> (:<)
-    UnfoldR :: RecVar -> (:<) -> (:<)
-    LookupL :: RecVar -> (:<) -> (:<)
-    LookupR :: RecVar -> (:<) -> (:<)
-    UniVarL :: UniVar -> Typ -> (:<)
-    UniVarR :: UniVar -> Typ -> (:<)
-    UniVarB :: UniVar -> UniVar -> (:<)
+data Witness where
+    Refl    :: Typ -> Witness
+    FromTop :: Typ -> Witness
+    ToBot   :: Typ -> Witness
+    Meet    :: Witness -> Witness -> Witness
+    Join    :: Witness -> Witness -> Witness
+    Func    :: Witness -> Witness -> Witness
+    Prim    :: Witness
+    UnfoldL :: RecVar -> Witness -> Witness
+    UnfoldR :: RecVar -> Witness -> Witness
+    LookupL :: RecVar -> Witness -> Witness
+    LookupR :: RecVar -> Witness -> Witness
+    UniVarL :: UniVar -> Typ -> Witness
+    UniVarR :: UniVar -> Typ -> Witness
+    UniVarB :: UniVar -> UniVar -> Witness
     -- | only used during witness generation
-    SubVar  :: DelayedConstraint -> (:<)
-    Fix     :: Constraint -> (:<)
+    SubVar  :: DelayedConstraint -> Witness
+    Fix     :: Constraint -> Witness
  deriving Show
 
 data Constraint where
@@ -179,7 +181,7 @@ substitute = do
       modify $ \(SolverState cache' vars)
               -> SolverState (M.adjust (const w) c cache') vars
   where
-    go :: Map Constraint (:<) -> (:<) -> ReaderT (Set DelayedConstraint) SolverM (:<)
+    go :: Map Constraint Witness -> Witness -> ReaderT (Set DelayedConstraint) SolverM Witness
     go _ (Refl ty) = pure (Refl ty)
     go _ (FromTop ty) = pure (FromTop ty)
     go _ (ToBot ty) = pure (ToBot ty)
@@ -206,7 +208,7 @@ substitute = do
 -- | Generate potentially incomplete witnesses
 -- using fresh witness variables in place for branches
 -- which will be substituted in later.
-solveSub :: DelayedConstraint -> SolverM ((:<), [DelayedConstraint])
+solveSub :: DelayedConstraint -> SolverM (Witness, [DelayedConstraint])
 -- here we have to check whether the subconstraint is in cache
 -- if it is, we have to put in /Fix/ with the constraint
 -- otherwise we have cyclic references in /substitute/
@@ -256,12 +258,13 @@ inCache :: Constraint -> SolverM Bool
 inCache c =  gets $ M.member c . ss_cache
 
 -- | Add solved constraint to cache and known witnesses.
-addToCache :: Constraint -> (:<) -> SolverM ()
+addToCache :: Constraint -> Witness -> SolverM ()
 addToCache c w = modify $ \(SolverState cache vars) -> SolverState (M.insert c w cache) vars
 
 modifyBounds :: (VarState -> VarState) -> UniVar -> SolverM ()
 modifyBounds f uv = modify (\(SolverState cache vars) -> SolverState cache (M.adjust f uv vars))
 
+-- | Get the variable state from the state for a univar.
 getBounds :: UniVar -> SolverM VarState
 getBounds uv = do
   bounds <- gets ss_vars
@@ -269,6 +272,7 @@ getBounds uv = do
     Nothing -> throwError $ "Tried to retrieve bounds for variable:" ++ unUniVar uv
     Just vs -> return vs
 
+-- | Add type to lower bounds of a univar and generate new constraints based on the upper bounds.
 addLowerBounds :: UniVar -> Typ -> Map RecVar Typ -> Map RecVar Typ -> SolverM [DelayedConstraint]
 addLowerBounds uv ty m m' = do
   modifyBounds (\(VarState ubs lbs) -> VarState ubs (ty:lbs)) uv
@@ -276,6 +280,7 @@ addLowerBounds uv ty m m' = do
   let ubs = vs_upperbounds bounds
   return [Delayed ty m ub m' | ub <- ubs]
 
+-- | Add type to upper bounds of a univar and generate new constraints based on the lower bounds.
 addUpperBounds :: UniVar -> Typ -> Map RecVar Typ -> Map RecVar Typ -> SolverM [DelayedConstraint]
 addUpperBounds uv ty m m' = do
   modifyBounds (\(VarState ubs lbs) -> VarState (ty:ubs) lbs) uv
